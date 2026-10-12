@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+
+<html dir="rtl" lang="ar"><head><meta charset="utf-8"/><meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" name="viewport"/><meta content="mobile_tab" name="shell-type"/><meta content="yes" name="apple-mobile-web-app-capable"/><meta content="default" name="apple-mobile-web-app-status-bar-style"/><link href="https://fonts.googleapis.com" rel="preconnect"/><link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/><link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&amp;display=swap" rel="stylesheet"/><link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/><script src="https://cdn.tailwindcss.com"></script><script id="tailwind-config">tailwind.config = { darkMode: "class", theme: { extend: { colors: { "outline": "#6d7a72", "surface-dim": "#cbdbf5", "primary-fixed": "#85f8c4", "inverse-on-surface": "#eaf1ff", "on-surface-variant": "#3d4a42", "surface-container-low": "#eff4ff", "on-error": "#ffffff", "on-tertiary-fixed": "#2a1700", "error-container": "#ffdad6", "tertiary-fixed": "#ffddb8", "on-secondary-container": "#fffbff", "surface": "#f8f9ff", "outline-variant": "#bccac0", "on-secondary-fixed-variant": "#2f2ebe", "error": "#ba1a1a", "surface-variant": "#d3e4fe", "surface-container-highest": "#d3e4fe", "on-secondary-fixed": "#07006c", "surface-container-lowest": "#ffffff", "background": "#f8f9ff", "primary-fixed-dim": "#68dba9", "secondary-container": "#6063ee", "primary": "#006948", "surface-tint": "#006c4a", "inverse-primary": "#68dba9", "on-primary-container": "#f5fff7", "tertiary-fixed-dim": "#ffb95f", "secondary-fixed": "#e1e0ff", "on-background": "#0b1c30", "on-error-container": "#93000a", "on-tertiary-container": "#fffbff", "on-tertiary": "#ffffff", "surface-container-high": "#dce9ff", "tertiary-container": "#a36700", "surface-container": "#e5eeff", "secondary": "#4648d4", "on-primary-fixed": "#002114", "tertiary": "#825100", "inverse-surface": "#213145", "on-primary-fixed-variant": "#005137", "secondary-fixed-dim": "#c0c1ff", "primary-container": "#00855d", "on-secondary": "#ffffff", "surface-bright": "#f8f9ff" }, borderRadius: { "DEFAULT": "0.25rem", "lg": "0.5rem", "xl": "0.75rem", "full": "9999px" }, spacing: { "space-xs": "0.25rem", "space-md": "1rem", "space-lg": "1.25rem", "space-xl": "1.5rem", "margin": "1rem", "gutter": "1rem", "space-sm": "0.5rem" }, fontFamily: { "metric-numeral": ["IBM Plex Sans"], "label-sm": ["IBM Plex Sans"], "body-lg": ["IBM Plex Sans"], "body-md": ["IBM Plex Sans"], "headline-lg": ["IBM Plex Sans"], "headline-sm": ["IBM Plex Sans"], "display": ["IBM Plex Sans"], "body-sm": ["IBM Plex Sans"], "label-md": ["IBM Plex Sans"], "headline-md": ["IBM Plex Sans"], "label-lg": ["IBM Plex Sans"] }, fontSize: { "metric-numeral": ["24px", { "lineHeight": "28px", "letterSpacing": "-0.02em", "fontWeight": "700" }], "label-sm": ["11px", { "lineHeight": "14px", "letterSpacing": "0.03em", "fontWeight": "600" }], "body-lg": ["17px", { "lineHeight": "24px", "letterSpacing": "0em", "fontWeight": "400" }], "body-md": ["15px", { "lineHeight": "21px", "letterSpacing": "0em", "fontWeight": "400" }], "headline-lg": ["28px", { "lineHeight": "34px", "letterSpacing": "-0.015em", "fontWeight": "700" }], "headline-sm": ["20px", { "lineHeight": "25px", "letterSpacing": "-0.005em", "fontWeight": "600" }], "display": ["34px", { "lineHeight": "41px", "letterSpacing": "-0.02em", "fontWeight": "700" }], "body-sm": ["13px", { "lineHeight": "18px", "letterSpacing": "0em", "fontWeight": "400" }], "label-md": ["12px", { "lineHeight": "16px", "letterSpacing": "0.02em", "fontWeight": "500" }], "headline-md": ["22px", { "lineHeight": "28px", "letterSpacing": "-0.01em", "fontWeight": "600" }], "label-lg": ["15px", { "lineHeight": "20px", "letterSpacing": "0.01em", "fontWeight": "600" }] } } } };</script><style>@layer base{html,body{width:100%;margin:0;padding:0;}body{overscroll-behavior-y:none;}.pb-safe{padding-bottom:env(safe-area-inset-bottom,0px);}.pt-safe{padding-top:env(safe-area-inset-top,0px);}main>:first-child{margin-top:0!important;}main>:last-child{margin-bottom:0!important;}}::-webkit-scrollbar{display:none;}</style></head><body class="bg-surface text-on-surface font-body-md min-h-screen antialiased selection:bg-primary/20"><div class="max-w-md mx-auto min-h-screen relative flex flex-col"><header class="fixed top-0 max-w-md w-full z-50 bg-surface/80 backdrop-blur-xl pt-safe shadow-[0_1px_8px_rgba(0,0,0,0.04)]"><div class="h-16 px-space-md flex items-center justify-between gap-space-sm"><div class="flex items-center gap-space-sm"><img alt="Nourish App Icon" class="h-8 w-auto object-contain" src="https://lh3.googleusercontent.com/aida/AEtjO1UWLudlueC2WoYui39RTjvs9lQO0ofE_CdXkcYbULZGNKZkbmOLjd4TAh3ltaH-KnglR9m0fTSxx_BJ6ASfwXmEE-8BSOLzCsM5-PRDov1OMmClP0o7dcKVCUETkafqH-syaRbBwai49wMRSvWEHvtledvPCR1uJcAn6wpvUfl1lRP7eNvNCOsTDI-JCzJE6KMEhI6fSPFR8MdB3gbvOCJsdxXKccB4_hCgrDRZE18R8sY1LySgzYzdl2Fx"/><span class="font-headline-sm text-headline-sm text-on-surface truncate">Today</span></div><div class="w-8 h-8 rounded-full bg-primary flex items-center justify-center shrink-0"><span class="material-symbols-outlined text-on-primary text-[18px]">person</span></div></div></header><main class="flex-1 w-full pt-16 pb-28 px-space-md bg-surface flex flex-col"><div class="flex flex-col w-full text-on-surface select-none pb-4" dir="rtl">
+<!-- Interactive Demo Switcher Pill (iOS Segmented Control) -->
+<header class="w-full mb-4">
+<div class="bg-surface-container-high p-1 rounded-full flex items-center justify-between shadow-sm">
+<button class="flex-1 py-1.5 px-3 rounded-full font-label-md text-label-md text-center transition-all duration-200 bg-surface text-on-surface shadow-sm font-semibold" id="tab-today-btn" onclick="switchView('today')">
+        اليوم
+      </button>
+<button class="flex-1 py-1.5 px-3 rounded-full font-label-md text-label-md text-center transition-all duration-200 text-on-surface-variant hover:text-on-surface" id="tab-modal-btn" onclick="openAddHub()">
+        + إضافة وجبة
+      </button>
+<button class="flex-1 py-1.5 px-3 rounded-full font-label-md text-label-md text-center transition-all duration-200 text-on-surface-variant hover:text-on-surface flex items-center justify-center gap-1" id="tab-review-btn" onclick="switchView('review')">
+<span class="material-symbols-outlined text-[15px] text-primary">auto_awesome</span>
+<span>مراجعة المسودة</span>
+</button>
+</div>
+</header>
+<!-- ========================================== -->
+<!-- VIEW 1: TODAY DASHBOARD (اليوم)             -->
+<!-- ========================================== -->
+<section class="flex flex-col gap-4 w-full transition-opacity duration-200" id="view-today">
+<!-- Date Navigator Card -->
+<div class="flex items-center justify-between px-3 py-2 bg-surface-container-lowest rounded-2xl shadow-sm">
+<button aria-label="اليوم السابق" class="w-9 h-9 rounded-full flex items-center justify-center text-on-surface-variant hover:bg-surface-container active:scale-95 transition-transform">
+<span class="material-symbols-outlined text-[20px] rtl:rotate-180">chevron_left</span>
+</button>
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-primary text-[20px]">calendar_today</span>
+<span class="font-headline-sm text-headline-sm tracking-tight text-on-surface">اليوم، 12 أكتوبر</span>
+</div>
+<button aria-label="اليوم التالي" class="w-9 h-9 rounded-full flex items-center justify-center text-on-surface-variant hover:bg-surface-container active:scale-95 transition-transform">
+<span class="material-symbols-outlined text-[20px] rtl:rotate-180">chevron_right</span>
+</button>
+</div>
+<!-- Hero Calorie Plinth -->
+<div class="bg-surface-container-lowest p-5 rounded-[20px] shadow-sm flex flex-col gap-4">
+<div class="flex items-center justify-between">
+<div>
+<span class="font-label-md text-label-md text-on-surface-variant block">السعرات المتبقية</span>
+<div class="flex items-baseline gap-1 mt-0.5">
+<span class="font-display text-display text-on-surface tracking-tight font-bold">1,250</span>
+<span class="font-body-sm text-body-sm text-on-surface-variant">سعرة حرارية</span>
+</div>
+</div>
+<!-- Estimated Quality Chip -->
+<span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[12px] font-medium bg-tertiary-fixed text-on-tertiary-fixed">
+<span>≈</span>
+<span>15% تقديري</span>
+</span>
+</div>
+<!-- Radial Multi-Ring Gauge Inline SVG -->
+<div class="flex items-center justify-between gap-4 pt-1">
+<div class="relative w-28 h-28 shrink-0 flex items-center justify-center">
+<svg class="w-28 h-28 transform -rotate-90" viewbox="0 0 100 100">
+<!-- Background circles -->
+<circle class="text-surface-container-high" cx="50" cy="50" fill="transparent" r="42" stroke="currentColor" stroke-width="7"></circle>
+<circle class="text-surface-container-high" cx="50" cy="50" fill="transparent" r="32" stroke="currentColor" stroke-width="6"></circle>
+<!-- Foreground arcs -->
+<!-- Calorie: 750 / 2000 = 37.5% -> circumference = 263.89, dasharray = 98.9 263.89 -->
+<circle cx="50" cy="50" fill="transparent" r="42" stroke="#006948" stroke-dasharray="98.9 263.89" stroke-linecap="round" stroke-width="7"></circle>
+<!-- Protein ring: 68 / 130 = 52.3% -> circ = 201.06, dash = 105.1 201.06 -->
+<circle cx="50" cy="50" fill="transparent" r="32" stroke="#4648d4" stroke-dasharray="105.1 201.06" stroke-linecap="round" stroke-width="6"></circle>
+</svg>
+<div class="absolute inset-0 flex flex-col items-center justify-center text-center pointer-events-none">
+<span class="text-[11px] font-medium text-on-surface-variant">المستهلك</span>
+<span class="text-[17px] font-bold text-on-surface leading-none mt-0.5">38%</span>
+</div>
+</div>
+<div class="flex-1 flex flex-col gap-2">
+<div class="flex items-center justify-between py-1.5 px-3 rounded-xl bg-surface-container-low">
+<div class="flex items-center gap-2">
+<span class="w-2.5 h-2.5 rounded-full bg-primary"></span>
+<span class="font-body-sm text-body-sm text-on-surface">تم تناوله</span>
+</div>
+<span class="font-label-lg text-label-lg font-bold text-on-surface">750 <span class="text-[11px] font-normal text-on-surface-variant">سعرة</span></span>
+</div>
+<div class="flex items-center justify-between py-1.5 px-3 rounded-xl bg-surface-container-low">
+<div class="flex items-center gap-2">
+<span class="w-2.5 h-2.5 rounded-full bg-outline-variant"></span>
+<span class="font-body-sm text-body-sm text-on-surface-variant">الهدف اليومي</span>
+</div>
+<span class="font-label-lg text-label-lg font-semibold text-on-surface-variant">2,000 <span class="text-[11px] font-normal">سعرة</span></span>
+</div>
+</div>
+</div>
+<!-- Macro Progress Bars (Clinical & Tactile) -->
+<div class="flex flex-col gap-3 pt-2">
+<!-- Protein Bar (Emphasized Vibrant Indigo) -->
+<div class="flex flex-col gap-1.5">
+<div class="flex justify-between items-center text-[13px]">
+<span class="font-semibold text-secondary flex items-center gap-1.5">
+<span class="w-2 h-2 rounded-full bg-secondary"></span>
+              بروتين
+            </span>
+<span class="font-medium text-on-surface">68g <span class="text-on-surface-variant text-[11px]">/ 130g (52%)</span></span>
+</div>
+<div class="w-full h-2.5 bg-surface-container-high rounded-full overflow-hidden">
+<div class="h-full bg-secondary rounded-full" style="width: 52%"></div>
+</div>
+</div>
+<!-- Carbs Bar (Amber) -->
+<div class="flex flex-col gap-1.5">
+<div class="flex justify-between items-center text-[13px]">
+<span class="font-semibold text-tertiary flex items-center gap-1.5">
+<span class="w-2 h-2 rounded-full bg-tertiary-fixed-dim"></span>
+              كربوهيدرات
+            </span>
+<span class="font-medium text-on-surface">92g <span class="text-on-surface-variant text-[11px]">/ 180g (51%)</span></span>
+</div>
+<div class="w-full h-2.5 bg-surface-container-high rounded-full overflow-hidden">
+<div class="h-full bg-tertiary-container rounded-full" style="width: 51%"></div>
+</div>
+</div>
+<!-- Fats Bar (Teal/Sky) -->
+<div class="flex flex-col gap-1.5">
+<div class="flex justify-between items-center text-[13px]">
+<span class="font-semibold text-primary-container flex items-center gap-1.5">
+<span class="w-2 h-2 rounded-full bg-primary-fixed-dim"></span>
+              دهون صحية
+            </span>
+<span class="font-medium text-on-surface">24g <span class="text-on-surface-variant text-[11px]">/ 60g (40%)</span></span>
+</div>
+<div class="w-full h-2.5 bg-surface-container-high rounded-full overflow-hidden">
+<div class="h-full bg-primary-container rounded-full" style="width: 40%"></div>
+</div>
+</div>
+</div>
+</div>
+<!-- MEALS LIST SECTION -->
+<div class="flex flex-col gap-3">
+<!-- Lunch Group Header -->
+<div class="flex items-center justify-between px-1">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-primary text-[20px]">sunny</span>
+<h2 class="font-headline-sm text-headline-sm text-on-surface">غداء</h2>
+</div>
+<span class="font-label-md text-label-md font-semibold text-on-surface-variant">595 سعرة حرارية</span>
+</div>
+<!-- Lunch Meal Card 1 (Photo + Macros) -->
+<article class="bg-surface-container-lowest p-3.5 rounded-2xl shadow-sm flex items-center gap-3.5 active:bg-surface-container-low transition-colors cursor-pointer" onclick="switchView('review')">
+<div class="w-16 h-16 rounded-xl overflow-hidden shrink-0 relative bg-surface-container">
+<img class="w-full h-full object-cover" data-alt="A delicious overhead culinary photo of sliced grilled chicken breast with roasted broccoli, cherry tomatoes, radish slices, and steamed rice in a ceramic bowl on wooden table" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDbvquRikf4ef1QvmJ5zYH0XtkGXbz6bqqVTwpO04b3qHYPev5H1s2Aqjnzb70EpK16oVWya5oAVMHVyL9DjgOZpbCyA-yDU-QlsokVZXduMx6lKnOnTlv_jnJrb5pG0tuVCCjLJP-FmzQhLcWsbz-46MDDrWxiX0IQ18D9QFIEXJ-H9FSROR7tImxbIOFrs9tTNjPoXWMBoTzbj0k_F_zb6bZYLK4CxLddl9xvKXIlBqpIS_PCcP5gRQ"/>
+<span class="absolute bottom-1 end-1 bg-on-background/70 text-on-primary text-[10px] px-1 rounded-sm">1:30 م</span>
+</div>
+<div class="flex-1 min-w-0 flex flex-col gap-1">
+<div class="flex items-start justify-between gap-1">
+<h3 class="font-headline-sm text-[16px] text-on-surface truncate font-semibold">صحن دجاج وأرز بالخضار</h3>
+<span class="shrink-0 inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full text-[11px] font-medium bg-tertiary-fixed text-on-tertiary-fixed">
+<span>≈</span>
+<span>تقديري</span>
+</span>
+</div>
+<div class="flex items-center gap-3 text-body-sm text-on-surface-variant font-body-sm">
+<span>455 سعرة</span>
+<span class="text-outline-variant">•</span>
+<span class="text-secondary font-medium">بروتين 45g</span>
+<span class="text-outline-variant">•</span>
+<span>360g</span>
+</div>
+</div>
+</article>
+<!-- Lunch Meal Card 2 (Verified Green Salad) -->
+<article class="bg-surface-container-lowest p-3.5 rounded-2xl shadow-sm flex items-center gap-3.5">
+<div class="w-12 h-12 rounded-xl bg-primary-fixed/30 text-primary flex items-center justify-center shrink-0">
+<span class="material-symbols-outlined text-[24px]">eco</span>
+</div>
+<div class="flex-1 min-w-0 flex flex-col gap-0.5">
+<div class="flex items-center justify-between">
+<h3 class="font-body-lg text-[15px] font-semibold text-on-surface truncate">سلطة خضراء بزيت الزيتون</h3>
+<span class="inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full text-[11px] font-medium bg-primary-fixed text-on-primary-fixed">
+<span class="material-symbols-outlined text-[13px]">check</span>
+<span>موثّق</span>
+</span>
+</div>
+<span class="text-body-sm text-on-surface-variant font-body-sm">140 سعرة • زيت زيتون بكر، خيار وخس</span>
+</div>
+</article>
+<!-- Breakfast Group Header -->
+<div class="flex items-center justify-between px-1 mt-2">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-tertiary-container text-[20px]">wb_twilight</span>
+<h2 class="font-headline-sm text-headline-sm text-on-surface">فطور</h2>
+</div>
+<span class="font-label-md text-label-md font-semibold text-on-surface-variant">340 سعرة حرارية</span>
+</div>
+<!-- Breakfast Meal Card (Verified Oatmeal) -->
+<article class="bg-surface-container-lowest p-3.5 rounded-2xl shadow-sm flex items-center gap-3.5">
+<div class="w-12 h-12 rounded-xl bg-secondary-fixed/40 text-secondary flex items-center justify-center shrink-0">
+<span class="material-symbols-outlined text-[24px]">breakfast_dining</span>
+</div>
+<div class="flex-1 min-w-0 flex flex-col gap-0.5">
+<div class="flex items-center justify-between">
+<h3 class="font-body-lg text-[15px] font-semibold text-on-surface truncate">شوفان بحليب اللوز والتوت</h3>
+<span class="inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full text-[11px] font-medium bg-primary-fixed text-on-primary-fixed">
+<span class="material-symbols-outlined text-[13px]">check</span>
+<span>موثّق</span>
+</span>
+</div>
+<span class="text-body-sm text-on-surface-variant font-body-sm">340 سعرة • 8:15 ص • بروتين 14g</span>
+</div>
+</article>
+<!-- Quick Add Floating Action Trigger inside view -->
+<button class="mt-2 w-full py-3.5 px-4 rounded-xl bg-surface-container-low hover:bg-surface-container text-primary font-semibold flex items-center justify-center gap-2 active:scale-[0.99] transition-all" onclick="openAddHub()">
+<span class="material-symbols-outlined text-[22px]">add_circle</span>
+<span>تسجيل وجبة جديدة لهذا اليوم</span>
+</button>
+</div>
+</section>
+<!-- ========================================== -->
+<!-- VIEW 2: ADD ENTRY HUB (Bottom Sheet Modal)  -->
+<!-- ========================================== -->
+<div class="fixed inset-0 z-50 bg-inverse-surface/60 backdrop-blur-sm hidden flex-col justify-end transition-opacity duration-300" id="view-modal-backdrop">
+<div class="flex-1 w-full" onclick="closeAddHub()"></div>
+<!-- Modal Card (iOS Sheet) -->
+<section class="max-w-md w-full mx-auto bg-surface rounded-t-[28px] p-5 pb-8 shadow-2xl flex flex-col gap-4 transform transition-transform duration-300">
+<!-- Grab Bar -->
+<div class="w-12 h-1.5 bg-outline-variant rounded-full mx-auto -mt-1 mb-1"></div>
+<div class="flex items-center justify-between">
+<div>
+<h2 class="font-headline-lg text-headline-lg text-on-surface font-bold">إضافة وجبة سريعة</h2>
+<p class="font-body-sm text-body-sm text-on-surface-variant mt-0.5">اختر الطريقة الأنسب لتسجيل طعامك بكل سلاسة</p>
+</div>
+<button aria-label="إغلاق النافذة" class="w-9 h-9 rounded-full bg-surface-container flex items-center justify-center text-on-surface-variant hover:text-on-surface active:scale-95" onclick="closeAddHub()">
+<span class="material-symbols-outlined text-[20px]">close</span>
+</button>
+</div>
+<!-- 2x2 Feature Grid -->
+<div class="grid grid-cols-2 gap-3 mt-1">
+<!-- Action 1: Camera AI (Leads to VIEW 3) -->
+<button class="p-4 rounded-2xl bg-surface-container-lowest hover:bg-surface-container-low shadow-sm flex flex-col items-start text-start gap-2.5 active:scale-[0.98] transition-all group" onclick="openFromHubToReview()">
+<div class="w-11 h-11 rounded-xl bg-primary text-on-primary flex items-center justify-center shadow-md shadow-primary/20 group-hover:scale-105 transition-transform">
+<span class="material-symbols-outlined text-[24px]">photo_camera</span>
+</div>
+<div>
+<span class="font-headline-sm text-[16px] font-bold text-on-surface block">صوّر وجبة</span>
+<span class="font-body-sm text-[12px] text-on-surface-variant mt-0.5 block leading-tight">تحليل فوري فائق بالذكاء الاصطناعي</span>
+</div>
+<span class="text-[11px] font-medium text-primary mt-1 inline-flex items-center gap-1">
+<span>تجربة الآن</span>
+<span class="material-symbols-outlined text-[14px] rtl:rotate-180">arrow_forward</span>
+</span>
+</button>
+<!-- Action 2: Voice or Text Prompt -->
+<button class="p-4 rounded-2xl bg-surface-container-lowest hover:bg-surface-container-low shadow-sm flex flex-col items-start text-start gap-2.5 active:scale-[0.98] transition-all group" onclick="closeAddHub(); showNotification('جاري تفعيل الإملاء الصوتي...')">
+<div class="w-11 h-11 rounded-xl bg-secondary text-on-secondary flex items-center justify-center shadow-md shadow-secondary/20 group-hover:scale-105 transition-transform">
+<span class="material-symbols-outlined text-[24px]">mic</span>
+</div>
+<div>
+<span class="font-headline-sm text-[16px] font-bold text-on-surface block">اكتب أو أملِ</span>
+<span class="font-body-sm text-[12px] text-on-surface-variant mt-0.5 block leading-tight">تحدث بالعامية أو اكتب مكوناتك بحرية</span>
+</div>
+<span class="text-[11px] font-medium text-secondary mt-1 inline-flex items-center gap-1">
+<span>تسجيل صوتي</span>
+<span class="material-symbols-outlined text-[14px]">graphic_eq</span>
+</span>
+</button>
+<!-- Action 3: Database Search -->
+<button class="p-4 rounded-2xl bg-surface-container-lowest hover:bg-surface-container-low shadow-sm flex flex-col items-start text-start gap-2.5 active:scale-[0.98] transition-all group" onclick="closeAddHub(); showNotification('جاري فتح قاعدة البيانات الغذائية...')">
+<div class="w-11 h-11 rounded-xl bg-surface-container-high text-on-surface flex items-center justify-center group-hover:scale-105 transition-transform">
+<span class="material-symbols-outlined text-[24px]">search</span>
+</div>
+<div>
+<span class="font-headline-sm text-[16px] font-bold text-on-surface block">بحث في القاعدة</span>
+<span class="font-body-sm text-[12px] text-on-surface-variant mt-0.5 block leading-tight">أكثر من 100,000 صنف غذائي محلي</span>
+</div>
+</button>
+<!-- Action 4: Saved & Recent -->
+<button class="p-4 rounded-2xl bg-surface-container-lowest hover:bg-surface-container-low shadow-sm flex flex-col items-start text-start gap-2.5 active:scale-[0.98] transition-all group" onclick="closeAddHub(); showNotification('استعراض الوجبات المفضلة...')">
+<div class="w-11 h-11 rounded-xl bg-surface-container-high text-on-surface flex items-center justify-center group-hover:scale-105 transition-transform">
+<span class="material-symbols-outlined text-[24px]">bookmark</span>
+</div>
+<div>
+<span class="font-headline-sm text-[16px] font-bold text-on-surface block">المحفوظة والأخيرة</span>
+<span class="font-body-sm text-[12px] text-on-surface-variant mt-0.5 block leading-tight">وجباتك المفضلة وسجل أسبوعك</span>
+</div>
+</button>
+</div>
+<!-- Quick Scan Barcode Bar -->
+<button class="w-full py-3 px-4 rounded-xl bg-surface-container flex items-center justify-center gap-2 text-on-surface font-semibold text-[15px] active:scale-[0.99] transition-all" onclick="closeAddHub(); showNotification('جاري فتح ماسح الباركود...')">
+<span class="material-symbols-outlined text-[20px]">barcode_scanner</span>
+<span>مسح باركود المنتج (Barcode)</span>
+</button>
+</section>
+</div>
+<!-- ========================================== -->
+<!-- VIEW 3: REVIEW / DRAFT MEAL (AI PARSER)     -->
+<!-- ========================================== -->
+<section class="hidden flex-col gap-4 w-full transition-opacity duration-200" id="view-review">
+<!-- Top Context Navigation -->
+<div class="flex items-center justify-between px-1">
+<button class="flex items-center gap-1 text-primary font-semibold font-body-md active:scale-95 transition-transform" onclick="switchView('today')">
+<span class="material-symbols-outlined text-[20px] rtl:rotate-180">arrow_back</span>
+<span>رجوع لليوم</span>
+</button>
+<span class="font-headline-sm text-headline-sm text-on-surface">مراجعة الوجبة</span>
+<button class="w-8 h-8 rounded-full bg-surface-container flex items-center justify-center text-on-surface-variant" onclick="switchView('today')">
+<span class="material-symbols-outlined text-[18px]">close</span>
+</button>
+</div>
+<!-- AI Banner with Food Photo Preview -->
+<div class="bg-surface-container-lowest p-4 rounded-[20px] shadow-sm flex items-center gap-3.5">
+<div class="w-20 h-20 rounded-xl overflow-hidden shrink-0 shadow-sm">
+<img class="w-full h-full object-cover" data-alt="Close up mouth watering bowl of sliced seasoned chicken breast, jasmine rice, fresh avocado, radishes and steamed greens with soft studio illumination" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDFArqU1T8_ZK3hCSro40A5H6XITnErSSP9yAl-xnVbI252l_-ka4xsbQPigPgHzD-4QUGCAffFXatNDrQNER61dB7mZnc5TtGvPf7PYoSpuacr2kDuRgKjdtdZhTw79rwHUxC-kjpYo8J_xmyO7siamRK0glMhgFu2mnX6YALxgDVqoyyCmx5_78ERJKLq--MTuiHReirw2oEWCUlALKXM7LhUrTI2D4qGLO09y-6qKWJzteGnzrkYBA"/>
+</div>
+<div class="flex-1 min-w-0 flex flex-col gap-1">
+<div class="flex items-center gap-1.5">
+<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-primary-fixed text-on-primary-fixed">
+<span class="material-symbols-outlined text-[13px]">auto_awesome</span>
+<span>مسودة ذكية</span>
+</span>
+<span class="text-body-sm text-[12px] text-on-surface-variant">رصد 3 مكونات</span>
+</div>
+<h3 class="font-headline-sm text-[17px] text-on-surface font-bold leading-tight">وجبة الغداء المتوازنة</h3>
+<p class="font-body-sm text-[12px] text-on-surface-variant">تحقق من أوزان المكونات والزيوت المضافة بالأسفل لضمان دقة السعرات.</p>
+</div>
+</div>
+<!-- Detected Food Items List -->
+<div class="flex flex-col gap-3">
+<div class="flex items-center justify-between px-1">
+<span class="font-label-lg text-label-lg font-bold text-on-surface">المكونات المرصودة</span>
+<span class="font-label-sm text-label-sm text-on-surface-variant">قابلة للتعديل</span>
+</div>
+<!-- Item 1: Chicken Breast -->
+<div class="bg-surface-container-lowest p-3.5 rounded-2xl shadow-sm flex flex-col gap-2.5">
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-2">
+<span class="font-body-lg text-[16px] font-bold text-on-surface">صدر دجاج مشوي</span>
+<span class="inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full text-[11px] font-medium bg-primary-fixed text-on-primary-fixed">
+<span class="material-symbols-outlined text-[12px]">check</span>
+<span>موثّق</span>
+</span>
+</div>
+<span class="text-body-sm text-on-surface-variant font-medium">247 سعرة</span>
+</div>
+<div class="flex items-center justify-between pt-1">
+<span class="text-body-sm text-secondary font-semibold">بروتين 46g • دهون 5g</span>
+<!-- Weight Stepper (min 16px text target to prevent iOS zoom) -->
+<div class="flex items-center gap-2 bg-surface-container-low rounded-xl p-1">
+<button class="w-8 h-8 rounded-lg bg-surface text-on-surface flex items-center justify-center font-bold text-[18px] active:scale-90 shadow-sm" onclick="adjustWeight('chicken-weight', -10)">−</button>
+<span class="w-12 text-center font-bold text-[16px] text-on-surface" id="chicken-weight">150g</span>
+<button class="w-8 h-8 rounded-lg bg-surface text-on-surface flex items-center justify-center font-bold text-[18px] active:scale-90 shadow-sm" onclick="adjustWeight('chicken-weight', 10)">+</button>
+</div>
+</div>
+</div>
+<!-- Item 2: Steamed Rice -->
+<div class="bg-surface-container-lowest p-3.5 rounded-2xl shadow-sm flex flex-col gap-2.5">
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-2">
+<span class="font-body-lg text-[16px] font-bold text-on-surface">أرز أبيض مطبوخ</span>
+<span class="inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full text-[11px] font-medium bg-primary-fixed text-on-primary-fixed">
+<span class="material-symbols-outlined text-[12px]">check</span>
+<span>موثّق</span>
+</span>
+</div>
+<span class="text-body-sm text-on-surface-variant font-medium">260 سعرة</span>
+</div>
+<div class="flex items-center justify-between pt-1">
+<span class="text-body-sm text-tertiary-container font-semibold">كربوهيدرات 57g • بروتين 4g</span>
+<div class="flex items-center gap-2 bg-surface-container-low rounded-xl p-1">
+<button class="w-8 h-8 rounded-lg bg-surface text-on-surface flex items-center justify-center font-bold text-[18px] active:scale-90 shadow-sm" onclick="adjustWeight('rice-weight', -20)">−</button>
+<span class="w-12 text-center font-bold text-[16px] text-on-surface" id="rice-weight">200g</span>
+<button class="w-8 h-8 rounded-lg bg-surface text-on-surface flex items-center justify-center font-bold text-[18px] active:scale-90 shadow-sm" onclick="adjustWeight('rice-weight', 20)">+</button>
+</div>
+</div>
+</div>
+<!-- Item 3: Olive Oil (Estimated) -->
+<div class="bg-surface-container-lowest p-3.5 rounded-2xl shadow-sm flex flex-col gap-2.5">
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-2">
+<span class="font-body-lg text-[16px] font-bold text-on-surface">زيت زيتون (تتبيل)</span>
+<span class="inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full text-[11px] font-medium bg-tertiary-fixed text-on-tertiary-fixed">
+<span>≈</span>
+<span>تقديري</span>
+</span>
+</div>
+<span class="text-body-sm text-on-surface-variant font-medium">88 سعرة</span>
+</div>
+<div class="flex items-center justify-between pt-1">
+<span class="text-body-sm text-primary-container font-semibold">دهون 10g</span>
+<div class="flex items-center gap-2 bg-surface-container-low rounded-xl p-1">
+<button class="w-8 h-8 rounded-lg bg-surface text-on-surface flex items-center justify-center font-bold text-[18px] active:scale-90 shadow-sm" onclick="adjustWeight('oil-weight', -2)">−</button>
+<span class="w-12 text-center font-bold text-[16px] text-on-surface" id="oil-weight">10g</span>
+<button class="w-8 h-8 rounded-lg bg-surface text-on-surface flex items-center justify-center font-bold text-[18px] active:scale-90 shadow-sm" onclick="adjustWeight('oil-weight', 2)">+</button>
+</div>
+</div>
+</div>
+</div>
+<!-- Hidden Ingredients Section (Things photo can't show) -->
+<div class="bg-surface-container-low p-4 rounded-2xl flex flex-col gap-3">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-tertiary text-[20px]">visibility_off</span>
+<div>
+<h4 class="font-headline-sm text-[15px] font-bold text-on-surface">أشياء لا تظهر في الصورة</h4>
+<p class="font-body-sm text-[12px] text-on-surface-variant">الزيوت والصلصات الخفية تصنع فارقاً مهماً في السعرات الدقيقة.</p>
+</div>
+</div>
+<!-- Quick Action Segmented Pills -->
+<div class="flex flex-col gap-1.5 pt-1">
+<span class="text-[12px] font-medium text-on-surface-variant">زيت طهي أو سمن إضافي:</span>
+<div class="grid grid-cols-4 gap-1.5 bg-surface-container-highest p-1 rounded-xl">
+<button class="oil-chip py-1.5 px-2 rounded-lg text-[13px] font-medium text-on-surface text-center transition-all bg-surface shadow-sm font-semibold" onclick="selectOilChip(this)">
+            لا شيء
+          </button>
+<button class="oil-chip py-1.5 px-2 rounded-lg text-[13px] font-medium text-on-surface-variant text-center transition-all hover:text-on-surface" onclick="selectOilChip(this)">
+            م. صغيرة
+          </button>
+<button class="oil-chip py-1.5 px-2 rounded-lg text-[13px] font-medium text-on-surface-variant text-center transition-all hover:text-on-surface" onclick="selectOilChip(this)">
+            م. كبيرة
+          </button>
+<button class="oil-chip py-1.5 px-2 rounded-lg text-[13px] font-medium text-on-surface-variant text-center transition-all hover:text-on-surface" onclick="selectOilChip(this)">
+            لا أعلم
+          </button>
+</div>
+</div>
+</div>
+<!-- Sticky Bottom Confirmation & CTA Bar -->
+<div class="bg-surface-container-lowest p-4 rounded-2xl shadow-sm flex flex-col gap-3.5 mt-1">
+<div class="flex items-center justify-between">
+<div>
+<span class="font-label-sm text-label-sm text-on-surface-variant block">الإجمالي المحسوب</span>
+<span class="font-headline-md text-headline-md font-bold text-on-surface">595 سعرة حرارية</span>
+</div>
+<span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[12px] font-medium bg-tertiary-fixed text-on-tertiary-fixed">
+<span>≈</span>
+<span>14% تقديري</span>
+</span>
+</div>
+<div class="flex items-center gap-2 text-[13px] text-on-surface-variant">
+<span class="font-semibold text-secondary">بروتين 52g</span>
+<span>•</span>
+<span class="font-semibold text-tertiary">كربوهيدرات 59g</span>
+<span>•</span>
+<span class="font-semibold text-primary">دهون 15g</span>
+</div>
+<!-- Confirmation Checkbox -->
+<label class="flex items-center gap-2.5 cursor-pointer text-body-sm text-[13px] text-on-surface">
+<input checked="" class="w-4 h-4 rounded text-primary focus:ring-0 accent-primary cursor-pointer" type="checkbox"/>
+<span>أؤكد صحة المكونات والتقديرات المحسوبة</span>
+</label>
+<!-- Primary Save Action Button (Min 44px touch target) -->
+<button class="w-full h-12 rounded-xl bg-primary hover:bg-primary-container text-on-primary font-semibold text-[16px] flex items-center justify-center gap-2 active:scale-[0.98] shadow-md shadow-primary/20 transition-all" onclick="saveMealAction()">
+<span class="material-symbols-outlined text-[20px]">check_circle</span>
+<span>حفظ الوجبة في سجل اليوم</span>
+</button>
+</div>
+</section>
+<!-- Ambient iOS Toast Notification Banner -->
+<div class="fixed top-20 start-1/2 -translate-x-1/2 rtl:translate-x-1/2 z-50 bg-inverse-surface text-inverse-on-surface py-2.5 px-5 rounded-full shadow-lg text-[14px] font-medium opacity-0 pointer-events-none transition-all duration-300 flex items-center gap-2" id="toast-banner">
+<span class="material-symbols-outlined text-primary-fixed text-[18px]">verified</span>
+<span id="toast-text">تم حفظ الوجبة بنجاح!</span>
+</div>
+</div>
+<script>
+  // Simple multi-view state manager
+  function switchView(viewName) {
+    const todayView = document.getElementById('view-today');
+    const reviewView = document.getElementById('view-review');
+    const todayBtn = document.getElementById('tab-today-btn');
+    const reviewBtn = document.getElementById('tab-review-btn');
+
+    if (viewName === 'today') {
+      todayView.classList.remove('hidden');
+      reviewView.classList.add('hidden');
+      
+      // Update switcher pills
+      todayBtn.className = 'flex-1 py-1.5 px-3 rounded-full font-label-md text-label-md text-center transition-all duration-200 bg-surface text-on-surface shadow-sm font-semibold';
+      reviewBtn.className = 'flex-1 py-1.5 px-3 rounded-full font-label-md text-label-md text-center transition-all duration-200 text-on-surface-variant hover:text-on-surface flex items-center justify-center gap-1';
+    } else if (viewName === 'review') {
+      todayView.classList.add('hidden');
+      reviewView.classList.remove('hidden');
+
+      // Update switcher pills
+      reviewBtn.className = 'flex-1 py-1.5 px-3 rounded-full font-label-md text-label-md text-center transition-all duration-200 bg-surface text-on-surface shadow-sm font-semibold flex items-center justify-center gap-1';
+      todayBtn.className = 'flex-1 py-1.5 px-3 rounded-full font-label-md text-label-md text-center transition-all duration-200 text-on-surface-variant hover:text-on-surface';
+    }
+  }
+
+  // Open & Close Bottom Sheet Modal
+  function openAddHub() {
+    const backdrop = document.getElementById('view-modal-backdrop');
+    backdrop.classList.remove('hidden');
+    backdrop.classList.add('flex');
+  }
+
+  function closeAddHub() {
+    const backdrop = document.getElementById('view-modal-backdrop');
+    backdrop.classList.add('hidden');
+    backdrop.classList.remove('flex');
+  }
+
+  function openFromHubToReview() {
+    closeAddHub();
+    switchView('review');
+  }
+
+  // Adjust item weights with steppers
+  function adjustWeight(elementId, delta) {
+    const span = document.getElementById(elementId);
+    let current = parseInt(span.innerText);
+    let updated = Math.max(0, current + delta);
+    span.innerText = updated + 'g';
+  }
+
+  // Segmented chip selector for oils
+  function selectOilChip(btn) {
+    document.querySelectorAll('.oil-chip').forEach(b => {
+      b.className = 'oil-chip py-1.5 px-2 rounded-lg text-[13px] font-medium text-on-surface-variant text-center transition-all hover:text-on-surface';
+    });
+    btn.className = 'oil-chip py-1.5 px-2 rounded-lg text-[13px] font-medium text-on-surface text-center transition-all bg-surface shadow-sm font-semibold';
+  }
+
+  // Feedback Toast notification
+  function showNotification(message) {
+    const toast = document.getElementById('toast-banner');
+    const toastText = document.getElementById('toast-text');
+    toastText.innerText = message;
+    toast.classList.remove('opacity-0', 'pointer-events-none');
+    toast.classList.add('opacity-100');
+    
+    setTimeout(() => {
+      toast.classList.add('opacity-0', 'pointer-events-none');
+      toast.classList.remove('opacity-100');
+    }, 2400);
+  }
+
+  function saveMealAction() {
+    showNotification('تم حفظ الوجبة في سجل اليوم بنجاح!');
+    setTimeout(() => {
+      switchView('today');
+    }, 600);
+  }
+
+  // Wire App Shell's central [+] nav button to open the Add Entry Hub
+  document.addEventListener('DOMContentLoaded', () => {
+    const addBtn = document.querySelector('nav a[data-path="add-meal"]');
+    if (addBtn) {
+      addBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        openAddHub();
+      });
+    }
+
+    const todayNavBtn = document.querySelector('nav a[data-path="today"]');
+    if (todayNavBtn) {
+      todayNavBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        switchView('today');
+      });
+    }
+  });
+</script></main><nav class="fixed bottom-0 max-w-md w-full z-50 bg-surface/80 backdrop-blur-xl pb-safe shadow-[0_-1px_12px_rgba(0,0,0,0.05)]" data-active-classes="text-primary font-label-md"><div class="flex items-center justify-around h-16 px-space-xs"><a aria-current="page" class="flex flex-col items-center justify-center min-w-[56px] h-12 transition-colors gap-0.5 text-primary font-label-md" data-path="today" href="#"><span class="material-symbols-outlined text-[24px]">today</span><span class="font-label-sm text-label-sm">اليوم</span></a><a class="flex flex-col items-center justify-center min-w-[56px] h-12 text-on-surface-variant hover:text-on-surface transition-colors gap-0.5" data-path="progress" href="#"><span class="material-symbols-outlined text-[24px]">insights</span><span class="font-label-sm text-label-sm">التقدم</span></a><a class="flex flex-col items-center justify-center -translate-y-3 shrink-0 active:scale-95 transition-transform" data-path="add-meal" href="#"><div class="w-12 h-12 rounded-full bg-primary text-on-primary flex items-center justify-center shadow-lg shadow-primary/25"><span class="material-symbols-outlined text-[26px]">add</span></div><span class="font-label-sm text-label-sm text-on-surface-variant mt-0.5">إضافة</span></a><a class="flex flex-col items-center justify-center min-w-[56px] h-12 text-on-surface-variant hover:text-on-surface transition-colors gap-0.5" data-path="library" href="#"><span class="material-symbols-outlined text-[24px]">local_dining</span><span class="font-label-sm text-label-sm">المكتبة</span></a><a class="flex flex-col items-center justify-center min-w-[56px] h-12 text-on-surface-variant hover:text-on-surface transition-colors gap-0.5" data-path="settings" href="#"><span class="material-symbols-outlined text-[24px]">settings</span><span class="font-label-sm text-label-sm">الإعدادات</span></a></div></nav></div></body></html>

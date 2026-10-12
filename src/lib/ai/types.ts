@@ -1,0 +1,54 @@
+export type CookingState = "raw" | "cooked" | "dry" | "unknown";
+export type Confidence = "high" | "medium" | "low";
+export type QuantityBasis = "user_stated" | "visual_guess" | "unknown";
+
+export interface ParsedItemQuantity {
+  grams_min: number;
+  grams_max: number;
+  basis: QuantityBasis;
+}
+
+export interface AiEstimatedPer100g {
+  kcal: number;
+  protein_g: number;
+  carbs_g: number;
+  fat_g: number;
+}
+
+export interface ParsedItem {
+  name_en: string;
+  name_ar: string;
+  cooking_state: CookingState;
+  confidence: Confidence;
+  visible: boolean;
+  quantity: ParsedItemQuantity;
+  ai_estimated_per_100g?: AiEstimatedPer100g;
+  needs_user_confirmation: string[];
+  warnings: string[];
+}
+
+export interface HiddenItem {
+  name_en: string;
+  reason: string;
+}
+
+export interface ClarifyingQuestion {
+  field: string;
+  question_en: string;
+  question_ar: string;
+}
+
+export interface MealDraft {
+  schema_version: string;
+  input_type: "photo" | "text";
+  language: "ar" | "en";
+  dish_name: {
+    en: string;
+    ar: string;
+  };
+  items: ParsedItem[];
+  possible_hidden_items: HiddenItem[];
+  global_warnings: string[];
+  clarifying_questions: ClarifyingQuestion[];
+  needs_clarification: boolean;
+}
