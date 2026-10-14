@@ -38,9 +38,24 @@ export interface ClarifyingQuestion {
   question_ar: string;
 }
 
+/** Inline media sent straight to Gemini (never stored). `base64` has no data-URL prefix. */
+export interface MediaPayload {
+  mimeType: string;
+  base64: string;
+}
+
+/** Any combination of text, voice and image describing a meal. At least one is required. */
+export interface MealInput {
+  text?: string;
+  audio?: MediaPayload;
+  image?: MediaPayload;
+}
+
+export type MealInputType = "photo" | "text" | "voice" | "multimodal";
+
 export interface MealDraft {
   schema_version: string;
-  input_type: "photo" | "text";
+  input_type: MealInputType;
   language: "ar" | "en";
   dish_name: {
     en: string;
@@ -51,4 +66,6 @@ export interface MealDraft {
   global_warnings: string[];
   clarifying_questions: ClarifyingQuestion[];
   needs_clarification: boolean;
+  /** Natural Arabic summary of what the model heard (voice) or saw (image). */
+  transcribed_or_detected_description_ar?: string;
 }

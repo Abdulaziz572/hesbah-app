@@ -2,17 +2,20 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { saveMeal } from "@/src/lib/meals";
+import { guessMealType, saveMeal, type MealType } from "@/src/lib/meals";
 import type { MealDraft } from "@/src/lib/ai/types";
 import {
   calcMacros,
   sumMacros,
   type ReviewItem,
 } from "@/src/lib/nutrition";
+import MealTypePicker from "./MealTypePicker";
+import GramsStepper from "./GramsStepper";
 
 interface Props {
   draft: MealDraft;
   initialRows: ReviewItem[];
+  targetDate?: Date;
   onBack: () => void;
 }
 
@@ -50,9 +53,11 @@ function QualityBadge({ item }: { item: ReviewItem }) {
   );
 }
 
-export default function ReviewScreen({ draft, initialRows, onBack }: Props) {
-  const [rows] = useState<ReviewItem[]>(initialRows);
-  const [grams, setGrams] = useState<number[]>(() => rows.map((r) => r.grams));
+export default function ReviewScreen({ draft, initialRows, targetDate, onBack }: Props) {
+  const [rows, setRows] = useState<ReviewItem[]>(initialRows);
+  const [grams, setGrams] = useState<number[]>(() => initialRows.map((r) => r.grams));
+  const [mealType, setMealType] = useState<MealType>(() => guessMealType());
+  const [title, setTitle] = useState(() => draft.dish_name?.ar || draft.dish_name?.en || "");
   const [confirmed, setConfirmed] = useState(true);
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -63,7 +68,7 @@ export default function ReviewScreen({ draft, initialRows, onBack }: Props) {
     setSaving(true);
     setSaveError(null);
     try {
-      await saveMeal(rows, grams);
+      await saveMeal(rows, grams, { mealType, title, targetDate });
       setSaved(true);
       router.push("/");
     } catch (e: unknown) {
@@ -77,6 +82,11 @@ export default function ReviewScreen({ draft, initialRows, onBack }: Props) {
 
   const setAt = (i: number, v: number) =>
     setGrams((g) => g.map((x, idx) => (idx === i ? Math.max(0, Math.min(5000, v)) : x)));
+
+  const removeAt = (i: number) => {
+    setRows((r) => r.filter((_, idx) => idx !== i));
+    setGrams((g) => g.filter((_, idx) => idx !== i));
+  };
 
   const perItem = useMemo(
     () => rows.map((r, i) => calcMacros(r.food, grams[i])),
@@ -112,6 +122,20 @@ export default function ReviewScreen({ draft, initialRows, onBack }: Props) {
         <span className="w-8" />
       </div>
 
+      {targetDate && (
+        <div className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl bg-secondary-container/15 text-secondary text-[13px] font-medium">
+          <span className="material-symbols-outlined text-[18px]">calendar_today</span>
+          <span>
+            تسجيل الوجبة لتاريخ: {new Intl.DateTimeFormat("ar-SA", { weekday: "long", day: "numeric", month: "long" }).format(targetDate)}
+          </span>
+        </div>
+      )}
+
+      <div className="bg-surface-container-lowest p-4 rounded-[20px] shadow-sm flex flex-col gap-2.5">
+        <span className="text-[13px] font-bold text-on-surface">نوع الوجبة</span>
+        <MealTypePicker value={mealType} onChange={setMealType} disabled={saving} />
+      </div>
+
       <div className="bg-surface-container-lowest p-4 rounded-[20px] shadow-sm flex flex-col gap-1">
         <div className="flex items-center gap-1.5">
           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-primary-fixed text-on-primary-fixed">
@@ -120,13 +144,40 @@ export default function ReviewScreen({ draft, initialRows, onBack }: Props) {
           </span>
           <span className="text-[12px] text-on-surface-variant">رصد {rows.length} مكونات</span>
         </div>
-        <h2 className="text-[17px] font-bold leading-tight text-on-surface">
-          {draft.dish_name?.ar || draft.dish_name?.en || "وجبتك"}
-        </h2>
-        <p className="text-[12px] text-on-surface-variant">
+        <label htmlFor="meal-title" className="sr-only">عنوان الوجبة</label>
+        <div className="flex items-center gap-2 rounded-xl bg-surface-container-low px-3 focus-within:ring-2 focus-within:ring-primary/40">
+          <input
+            id="meal-title"
+            type="text"
+            dir="rtl"
+            value={title}
+            maxLength={120}
+            disabled={saving}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="عنوان الوجبة (مثال: غداء الشغل)"
+            className="flex-1 min-w-0 h-11 bg-transparent outline-none text-[17px] font-bold text-on-surface placeholder:text-outline placeholder:font-normal"
+          />
+          <span className="material-symbols-outlined text-[18px] text-outline" aria-hidden>edit</span>
+        </div>
+        <p className="text-[12px] text-on-surface-variant pt-1">
           تحقق من أوزان المكونات والزيوت المضافة بالأسفل لضمان دقة السعرات.
         </p>
       </div>
+
+      {draft.transcribed_or_detected_description_ar?.trim() && (
+        <div className="flex items-start gap-2.5 p-3.5 rounded-2xl bg-surface-container-low">
+          <span className="material-symbols-outlined text-[20px] text-secondary mt-0.5">
+            {draft.input_type === "voice" ? "graphic_eq" : draft.input_type === "photo" ? "image_search" : "visibility"}
+          </span>
+          <div className="flex flex-col gap-0.5">
+            <span className="text-[12px] font-semibold text-secondary">ما فهمناه من إدخالك</span>
+            <p className="text-[13px] leading-5 text-on-surface">
+              {draft.transcribed_or_detected_description_ar}
+            </p>
+          </div>
+        </div>
+      )}
+
 
       {(draft.global_warnings?.length > 0 || unmatched > 0) && (
         <div className="flex flex-col gap-1 p-3 rounded-xl bg-tertiary-fixed text-on-tertiary-fixed text-[12px]">
@@ -154,7 +205,7 @@ export default function ReviewScreen({ draft, initialRows, onBack }: Props) {
 
         {rows.length === 0 && (
           <div className="p-4 rounded-2xl bg-surface-container-low text-[13px] text-on-surface-variant text-center">
-            لم يتم التعرف على أي مكونات غذائية. جرّب وصفاً آخر.
+            لا توجد مكونات لحفظها. ارجع وجرّب وصفاً آخر.
           </div>
         )}
 
@@ -169,45 +220,28 @@ export default function ReviewScreen({ draft, initialRows, onBack }: Props) {
                   </span>
                   <QualityBadge item={r} />
                 </div>
-                <span className="text-[13px] text-on-surface-variant font-medium shrink-0">
-                  {fmt(m.calories)} سعرة
-                </span>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <span className="text-[13px] text-on-surface-variant font-medium">
+                    {fmt(m.calories)} سعرة
+                  </span>
+                  <button
+                    id={`remove-item-${i}`}
+                    type="button"
+                    aria-label={`حذف ${r.parsed.name_ar || r.parsed.name_en}`}
+                    onClick={() => removeAt(i)}
+                    disabled={saving}
+                    className="w-8 h-8 rounded-full text-on-surface-variant hover:bg-error-container hover:text-on-error-container flex items-center justify-center active:scale-90 transition-all disabled:opacity-50"
+                  >
+                    <span className="material-symbols-outlined text-[20px]">delete</span>
+                  </button>
+                </div>
               </div>
 
               <div className="flex items-center justify-between pt-1 gap-2">
                 <span className="text-[13px] text-secondary font-semibold">
                   بروتين {fmt(m.protein)}g • كربوهيدرات {fmt(m.carbs)}g • دهون {fmt(m.fat)}g
                 </span>
-                <div className="flex items-center gap-1 bg-surface-container-low rounded-xl p-1 shrink-0">
-                  <button
-                    type="button"
-                    aria-label="إنقاص"
-                    onClick={() => setAt(i, grams[i] - 10)}
-                    className="w-8 h-8 rounded-lg bg-surface text-on-surface flex items-center justify-center font-bold text-[18px] active:scale-90 shadow-sm"
-                  >
-                    −
-                  </button>
-                  <div className="flex items-baseline gap-0.5">
-                    <input
-                      id={`grams-${i}`}
-                      type="number"
-                      inputMode="numeric"
-                      min={0}
-                      value={Number.isFinite(grams[i]) ? grams[i] : ""}
-                      onChange={(e) => setAt(i, e.target.value === "" ? 0 : Number(e.target.value))}
-                      className="w-14 text-center font-bold text-[16px] text-on-surface bg-transparent outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                    />
-                    <span className="text-[12px] text-on-surface-variant pe-1">g</span>
-                  </div>
-                  <button
-                    type="button"
-                    aria-label="زيادة"
-                    onClick={() => setAt(i, grams[i] + 10)}
-                    className="w-8 h-8 rounded-lg bg-surface text-on-surface flex items-center justify-center font-bold text-[18px] active:scale-90 shadow-sm"
-                  >
-                    +
-                  </button>
-                </div>
+                <GramsStepper id={`grams-${i}`} value={grams[i]} onChange={(v) => setAt(i, v)} disabled={saving} />
               </div>
 
               {r.parsed.quantity.grams_max > 0 && (

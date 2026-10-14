@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { MealParser } from "../../../src/lib/ai/MealParser";
+import type { MediaPayload } from "../../../src/lib/ai/types";
 
 const TEST_INPUT = "أكلت نص حبة دجاج شواية مع صحن رز بخاري صغير، وشربت بيبسي دايت";
 
@@ -17,18 +18,69 @@ export async function GET() {
   }
 }
 
+// Vercel serverless request bodies are capped at 4.5 MB; leave headroom for JSON overhead.
+const MAX_BODY_BYTES = 4_200_000;
+// Base64 chars per media payload (~3 MB of base64 each is already generous after compression).
+const MAX_AUDIO_B64 = 3_500_000;
+const MAX_IMAGE_B64 = 3_000_000;
+
+// Long audio/vision requests can take a while; give the function room on Vercel.
+export const maxDuration = 60;
+
+function parseMedia(
+  value: unknown,
+  kind: "audio" | "image",
+): { media?: MediaPayload; error?: string; status?: number } {
+  if (value === undefined || value === null) return {};
+  if (typeof value !== "object") return { error: `Field '${kind}' is invalid`, status: 400 };
+  const { mimeType, base64 } = value as Partial<MediaPayload>;
+  if (typeof mimeType !== "string" || typeof base64 !== "string" || !base64) {
+    return { error: `Field '${kind}' must be { mimeType, base64 }`, status: 400 };
+  }
+  if (!mimeType.toLowerCase().startsWith(`${kind}/`)) {
+    return { error: `Field '${kind}.mimeType' must be ${kind}/*`, status: 400 };
+  }
+  if (base64.length > (kind === "audio" ? MAX_AUDIO_B64 : MAX_IMAGE_B64)) {
+    return { error: `The ${kind} is too large. Please use a shorter/smaller one.`, status: 413 };
+  }
+  return { media: { mimeType, base64 } };
+}
+
 export async function POST(request: Request) {
-  let text: unknown;
+  const declaredLength = Number(request.headers.get("content-length") ?? 0);
+  if (declaredLength > MAX_BODY_BYTES) {
+    return NextResponse.json({ error: "Request body too large" }, { status: 413 });
+  }
+
+  let body: { text?: unknown; audio?: unknown; image?: unknown };
   try {
-    ({ text } = await request.json());
+    body = await request.json();
   } catch {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
-  if (typeof text !== "string" || !text.trim()) {
-    return NextResponse.json({ error: "Field 'text' is required" }, { status: 400 });
+  if (typeof body !== "object" || body === null) {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
+
+  const text = typeof body.text === "string" ? body.text.trim() : "";
+  const audio = parseMedia(body.audio, "audio");
+  if (audio.error) return NextResponse.json({ error: audio.error }, { status: audio.status });
+  const image = parseMedia(body.image, "image");
+  if (image.error) return NextResponse.json({ error: image.error }, { status: image.status });
+
+  if (!text && !audio.media && !image.media) {
+    return NextResponse.json(
+      { error: "Provide at least one of 'text', 'audio' or 'image'" },
+      { status: 400 },
+    );
+  }
+
   try {
-    const draft = await MealParser.parseText(text.trim());
+    const draft = await MealParser.parseMealInput({
+      text,
+      audio: audio.media,
+      image: image.media,
+    });
     return NextResponse.json(draft);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";

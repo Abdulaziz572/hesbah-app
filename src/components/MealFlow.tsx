@@ -1,28 +1,38 @@
 "use client";
 
 import { useState } from "react";
-import type { MealDraft } from "@/src/lib/ai/types";
+import type { MealDraft, MealInput } from "@/src/lib/ai/types";
 import { buildReviewItems, type ReviewItem } from "@/src/lib/nutrition";
 import DescribeScreen from "./DescribeScreen";
 import ReviewScreen from "./ReviewScreen";
+import { localDateString, parseDateKey } from "@/src/lib/dates";
 
-export default function MealFlow() {
+class PayloadTooLargeError extends Error {}
+
+export default function MealFlow({ targetDateKey }: { targetDateKey?: string }) {
+  // Only past days or today are valid targets; anything else falls back to "now".
+  const parsed = parseDateKey(targetDateKey);
+  const targetDate = parsed && localDateString(parsed) <= localDateString() ? parsed : undefined;
+
   const [draft, setDraft] = useState<MealDraft | null>(null);
   const [rows, setRows] = useState<ReviewItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function analyze(text: string) {
+  async function analyze(input: MealInput) {
     setLoading(true);
     setError(null);
     try {
       const res = await fetch("/api/test-ai", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text }),
+        body: JSON.stringify(input),
       });
       const data = await res.json().catch(() => null);
       if (!res.ok || !data || !Array.isArray(data.items)) {
+        if (res.status === 413) {
+          throw new PayloadTooLargeError();
+        }
         throw new Error(data?.error || "تعذّر تحليل الوجبة");
       }
       const resolved = await buildReviewItems((data as MealDraft).items);
@@ -31,9 +41,11 @@ export default function MealFlow() {
     } catch (e) {
       console.error(e);
       setError(
-        e instanceof TypeError
-          ? "تعذّر الاتصال بالخادم. تحقق من اتصالك وحاول مجدداً."
-          : "حدث خطأ أثناء تحليل الوجبة. حاول مرة أخرى.",
+        e instanceof PayloadTooLargeError
+          ? "الملف المرفق كبير جداً. جرّب تسجيلاً أقصر أو صورة أصغر."
+          : e instanceof TypeError
+            ? "تعذّر الاتصال بالخادم. تحقق من اتصالك وحاول مجدداً."
+            : "حدث خطأ أثناء تحليل الوجبة. حاول مرة أخرى.",
       );
     } finally {
       setLoading(false);
@@ -55,7 +67,7 @@ export default function MealFlow() {
       </header>
       <main className="flex-1 px-4 pb-28 pt-2">
         {draft ? (
-          <ReviewScreen key={draft.dish_name?.en + String(rows.length)} draft={draft} initialRows={rows} onBack={() => setDraft(null)} />
+          <ReviewScreen key={draft.dish_name?.en + String(rows.length)} draft={draft} initialRows={rows} targetDate={targetDate} onBack={() => setDraft(null)} />
         ) : (
           <DescribeScreen onAnalyze={analyze} loading={loading} error={error} />
         )}

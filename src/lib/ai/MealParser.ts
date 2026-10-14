@@ -3,7 +3,7 @@ import {
   SchemaType,
   type ResponseSchema,
 } from "@google/generative-ai";
-import type { MealDraft } from "./types";
+import type { MealDraft, MealInput, MealInputType, MediaPayload } from "./types";
 
 const MODEL_NAME = "gemini-3.5-flash-lite";
 const SCHEMA_VERSION = "1.0";
@@ -34,10 +34,28 @@ HIDDEN ITEMS:
 - ALWAYS consider and flag hidden items in possible_hidden_items: cooking oil, ghee/samn, butter, sauces (tomato, daqoos, tahini, mayo, garlic sauce), added sugar, fried onions, nuts/raisins in rice. Give a short reason for each.
 - Only list an item in "items" with visible=true if it is seen or stated; use visible=false for inferred ingredients.
 
+AUDIO INPUT (voice recordings):
+- The user may attach an audio recording of themselves describing a meal. Listen to it carefully and treat it exactly like a typed description.
+- Accurately understand Arabic, including Saudi/Gulf/Najdi/Hijazi dialect food terms, colloquial quantities ("نص", "ربع", "حبتين", "صحن", "كاسة", "معلقة", "كفّ") and brand/product names (e.g. Al Baik/البيك, Kudu/كودو, Almarai/المراعي, Pepsi/بيبسي, Nadec, Saudia). Ignore filler words, hesitations and background noise.
+- If the audio is silent, unintelligible, or contains no food, return an empty items array, add a global warning (e.g. the recording was unclear) and set needs_clarification to true.
+
+IMAGE INPUT (photos):
+- The user may attach a photo (camera, gallery, screenshot or pasted picture). Identify every visible food and drink, including cooked dishes, packaged products and drinks.
+- Visually estimate each item's portion in grams from plate/bowl/container proportions, utensils, hands, cups and packaging for scale. Use quantity.basis = "visual_guess" and keep ranges honest (widen them when the angle, lighting or scale is poor).
+- Identify cooked dishes and decompose them into base ingredients (see rule 2). Note cooking method when visible (grilled, fried, baked).
+- If the photo shows a nutrition facts label or packaged-product label, read the printed values carefully: use the printed serving size/weight for the quantity (basis "user_stated" when the label states it) and copy the printed per-100g (or per-serving converted to per-100g) values into ai_estimated_per_100g for that item. Use the brand/product name on the package.
+- If the photo is blurry, dark or does not show food, add a global warning and set needs_clarification to true.
+
+COMBINED INPUT:
+- Text, audio and image may be combined. The user's note or speech takes priority over visual guesses when it states a quantity or correction (e.g. "أكلت نص هذا الصحن فقط" = only half of the plate shown; scale your gram estimate of the photographed portion accordingly and use basis "user_stated" when appropriate).
+
+DESCRIPTION FIELD:
+- Whenever the input includes audio and/or an image, ALWAYS fill transcribed_or_detected_description_ar with one short, natural Arabic sentence (or two) summarizing what you heard (for voice, a faithful cleaned-up transcription/summary) and/or what you saw (for photos). Never put nutrient values in it. For text-only input you may leave it as an empty string.
+
 CONFIDENCE & CLARIFICATION:
 - Set confidence per item (high/medium/low). Use needs_user_confirmation (list of field names such as "quantity", "cooking_state", "name") when the user should confirm.
 - Add clarifying_questions (field, question_en, question_ar) for important ambiguities, and set needs_clarification true if any exist or any item has low confidence.
-- Use global_warnings for meal-level issues (e.g. blurry photo, unclear portion size). Empty arrays are allowed.
+- Use global_warnings for meal-level issues (e.g. blurry photo, unclear portion size, unclear audio). Empty arrays are allowed.
 - If the input is not food, return an empty items array, a global warning, and needs_clarification true.
 - schema_version must be "${SCHEMA_VERSION}".`;
 
@@ -53,7 +71,7 @@ const MEAL_DRAFT_SCHEMA: ResponseSchema = {
     input_type: {
       type: SchemaType.STRING,
       format: "enum",
-      enum: ["photo", "text"],
+      enum: ["photo", "text", "voice", "multimodal"],
     },
     language: {
       type: SchemaType.STRING,
@@ -150,6 +168,7 @@ const MEAL_DRAFT_SCHEMA: ResponseSchema = {
       },
     },
     needs_clarification: { type: SchemaType.BOOLEAN },
+    transcribed_or_detected_description_ar: { type: SchemaType.STRING },
   },
   required: [
     "schema_version",
@@ -182,7 +201,7 @@ export class MealParser {
     });
   }
 
-  private static parseResponse(raw: string, inputType: "photo" | "text"): MealDraft {
+  private static parseResponse(raw: string, inputType: MealInputType): MealDraft {
     let parsed: unknown;
     try {
       parsed = JSON.parse(raw);
@@ -202,26 +221,80 @@ export class MealParser {
     return draft;
   }
 
+  /** Strip a data-URL prefix and any whitespace from a base64 string. */
+  private static cleanBase64(data: string): string {
+    return data.replace(/^data:[^;]+;base64,/, "").replace(/\s+/g, "");
+  }
+
+  /** Gemini wants a bare MIME type: "audio/webm;codecs=opus" -> "audio/webm". */
+  private static baseMime(mimeType: string): string {
+    return mimeType.split(";")[0].trim().toLowerCase();
+  }
+
+  private static mediaPart(media: MediaPayload) {
+    return {
+      inlineData: {
+        data: MealParser.cleanBase64(media.base64),
+        mimeType: MealParser.baseMime(media.mimeType),
+      },
+    };
+  }
+
+  /**
+   * Unified entry point: any combination of text, voice and image. Media is passed
+   * inline to Gemini and never persisted.
+   */
+  static async parseMealInput(input: MealInput): Promise<MealDraft> {
+    const text = input.text?.trim() ?? "";
+    const { audio, image } = input;
+    if (!text && !audio?.base64 && !image?.base64) {
+      throw new Error("MealParser: no input provided (text, audio or image required).");
+    }
+
+    const kinds = [text && "text", audio?.base64 && "voice", image?.base64 && "photo"].filter(
+      Boolean,
+    );
+    const inputType: MealInputType =
+      kinds.length > 1 ? "multimodal" : ((kinds[0] as MealInputType | undefined) ?? "text");
+
+    const instructions: string[] = [`Input type: ${inputType}`];
+    if (audio?.base64) {
+      instructions.push(
+        "An audio recording of the user describing their meal is attached. Listen to it and extract the foods and quantities.",
+      );
+    }
+    if (image?.base64) {
+      instructions.push(
+        "A photo related to the meal is attached. Identify the foods and visually estimate portions in grams.",
+      );
+    }
+    if (text) {
+      instructions.push(
+        `${audio || image ? "Additional note from the user" : "Meal description"}:\n${text}`,
+      );
+    }
+
+    const parts: Array<{ text: string } | ReturnType<typeof MealParser.mediaPart>> = [
+      { text: instructions.join("\n") },
+    ];
+    if (image?.base64) parts.push(MealParser.mediaPart(image));
+    if (audio?.base64) parts.push(MealParser.mediaPart(audio));
+
+    const result = await MealParser.getModel().generateContent(parts);
+    return MealParser.parseResponse(result.response.text(), inputType);
+  }
+
   static async parseText(text: string): Promise<MealDraft> {
     if (!text.trim()) {
       throw new Error("MealParser: text input is empty.");
     }
-    const result = await MealParser.getModel().generateContent([
-      { text: `Input type: text\nMeal description:\n${text}` },
-    ]);
-    return MealParser.parseResponse(result.response.text(), "text");
+    return MealParser.parseMealInput({ text });
   }
 
   static async parseImage(base64Image: string, mimeType: string): Promise<MealDraft> {
     if (!base64Image) {
       throw new Error("MealParser: image data is empty.");
     }
-    // Strip a data-URL prefix if present.
-    const data = base64Image.replace(/^data:[^;]+;base64,/, "");
-    const result = await MealParser.getModel().generateContent([
-      { text: "Input type: photo\nIdentify the foods in this meal photo." },
-      { inlineData: { data, mimeType } },
-    ]);
-    return MealParser.parseResponse(result.response.text(), "photo");
+    return MealParser.parseMealInput({ image: { base64: base64Image, mimeType } });
   }
 }

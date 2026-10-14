@@ -1,22 +1,39 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
-import { fetchMealsForDay, type DiaryMeal } from "@/src/lib/meals";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  MEAL_TYPES,
+  deleteMeal,
+  fetchDaySummaries,
+  fetchMealsForDay,
+  type DaySummary,
+  type DiaryMeal,
+} from "@/src/lib/meals";
 import { sumMacros } from "@/src/lib/nutrition";
 import { useAuth } from "@/src/context/AuthContext";
+import {
+  addDays,
+  addMonths,
+  endOfMonth,
+  formatDayFull,
+  isSameDay,
+  localDateString,
+  startOfMonth,
+  startOfWeek,
+} from "@/src/lib/dates";
+import CalendarPicker from "./CalendarPicker";
+import WeeklySummaryCard from "./WeeklySummaryCard";
+import EditMealSheet from "./EditMealSheet";
 
 /** Daily target calories (can be configured per profile in future). */
 const CALORIE_GOAL = 2000;
 
 const fmt = (n: number) => Math.round(n).toLocaleString("en-US");
 
-const MEAL_LABEL: Record<string, { label: string; icon: string }> = {
-  breakfast: { label: "الفطور", icon: "bakery_dining" },
-  lunch: { label: "الغداء", icon: "lunch_dining" },
-  dinner: { label: "العشاء", icon: "dinner_dining" },
-  snack: { label: "وجبة خفيفة", icon: "cookie" },
-};
+const MEAL_LABEL: Record<string, { label: string; icon: string }> = Object.fromEntries(
+  MEAL_TYPES.map((t) => [t.value, { label: t.label, icon: t.icon }]),
+);
 
 function Ring({ value, goal }: { value: number; goal: number }) {
   const r = 52;
@@ -60,33 +77,108 @@ function MacroCard({ label, value, color }: { label: string; value: number; colo
 
 export default function Diary() {
   const { user, signOut } = useAuth();
+  const [selectedDate, setSelectedDate] = useState<Date>(() => new Date());
   const [meals, setMeals] = useState<DiaryMeal[] | null>(null);
+  const [daySummaries, setDaySummaries] = useState<Record<string, DaySummary>>({});
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [editing, setEditing] = useState<DiaryMeal | null>(null);
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
-  async function loadData() {
+  const today = useMemo(() => new Date(), []);
+  const isSelectedToday = isSameDay(selectedDate, today);
+  const isSelectedYesterday = isSameDay(selectedDate, addDays(today, -1));
+
+  const weekStart = useMemo(() => startOfWeek(selectedDate), [selectedDate]);
+
+  // Load summaries for range (month before to month after)
+  const loadSummaries = useCallback(async (baseDate: Date) => {
+    try {
+      const from = addMonths(startOfMonth(baseDate), -1);
+      const to = addMonths(endOfMonth(baseDate), 1);
+      const sums = await fetchDaySummaries(from, to);
+      setDaySummaries((prev) => ({ ...prev, ...sums }));
+    } catch (e) {
+      console.error("[diary] failed to load summaries", e);
+    }
+  }, []);
+
+  // Reload data for the currently selected date
+  const loadData = useCallback(async (d: Date) => {
     setRefreshing(true);
     try {
-      const data = await fetchMealsForDay();
+      const data = await fetchMealsForDay(d);
       setMeals(data);
       setError(null);
+      void loadSummaries(d);
     } catch (e: unknown) {
       console.error(e);
-      const msg = e instanceof Error ? e.message : "تعذّر تحميل وجبات اليوم. حاول مرة أخرى.";
+      const msg = e instanceof Error ? e.message : "تعذّر تحميل وجبات هذا اليوم. حاول مرة أخرى.";
       setError(msg);
     } finally {
       setRefreshing(false);
     }
+  }, [loadSummaries]);
+
+  // Asynchronous load whenever selectedDate changes
+  useEffect(() => {
+    let ignore = false;
+    void (async () => {
+      try {
+        const [data, sums] = await Promise.all([
+          fetchMealsForDay(selectedDate),
+          fetchDaySummaries(
+            addMonths(startOfMonth(selectedDate), -1),
+            addMonths(endOfMonth(selectedDate), 1),
+          ),
+        ]);
+        if (!ignore) {
+          setMeals(data);
+          setDaySummaries((prev) => ({ ...prev, ...sums }));
+          setError(null);
+        }
+      } catch (e: unknown) {
+        if (!ignore) {
+          console.error(e);
+          setError("تعذّر تحميل وجبات هذا اليوم. حاول مرة أخرى.");
+        }
+      }
+    })();
+
+    return () => {
+      ignore = true;
+    };
+  }, [selectedDate]);
+
+  async function handleDelete(id: string) {
+    setDeletingId(id);
+    setActionError(null);
+    try {
+      await deleteMeal(id);
+      // Drop it locally so the calorie ring and macro totals recompute immediately
+      setMeals((prev) => (prev ? prev.filter((m) => m.id !== id) : prev));
+      setConfirmingId(null);
+      // Refresh summaries for calendar dots & weekly chart
+      void loadSummaries(selectedDate);
+    } catch (e: unknown) {
+      console.error(e);
+      setActionError(e instanceof Error ? e.message : "تعذّر حذف الوجبة. حاول مرة أخرى.");
+    } finally {
+      setDeletingId(null);
+    }
   }
 
-  useEffect(() => {
-    loadData();
-  }, []);
-
   const totals = useMemo(() => sumMacros((meals ?? []).map((m) => m.totals)), [meals]);
-  const today = new Intl.DateTimeFormat("ar-SA", { weekday: "long", day: "numeric", month: "long" }).format(
-    new Date(),
-  );
+
+  const dateLabel = isSelectedToday
+    ? "اليوم"
+    : isSelectedYesterday
+    ? "أمس"
+    : formatDayFull(selectedDate);
+
+  const selectedDateKey = localDateString(selectedDate);
 
   return (
     <div className="max-w-md w-full mx-auto min-h-screen flex flex-col pb-28">
@@ -98,7 +190,7 @@ export default function Diary() {
           </div>
           <div>
             <span className="text-[18px] font-bold text-on-surface block leading-tight">حسبة</span>
-            <span className="text-[11px] text-on-surface-variant block">{today}</span>
+            <span className="text-[11px] text-on-surface-variant block">{formatDayFull(today)}</span>
           </div>
         </div>
 
@@ -121,35 +213,77 @@ export default function Diary() {
         </div>
       </header>
 
-      <main className="flex-1 px-4 pt-4 flex flex-col gap-5">
+      <main className="flex-1 px-4 pt-3 flex flex-col gap-4">
         <h1 className="sr-only">اليوميات</h1>
 
-        {/* Calorie Progress Ring Summary */}
+        {/* 1. Calendar History: Interactive Week Strip & Month Modal */}
+        <section aria-label="التاريخ والتقويم" className="bg-surface-container-lowest rounded-[24px] p-3 shadow-sm border border-outline-variant/20">
+          <CalendarPicker
+            selectedDate={selectedDate}
+            onSelectDate={setSelectedDate}
+            daySummaries={daySummaries}
+            onMonthChange={loadSummaries}
+          />
+        </section>
+
+        {/* 2. Weekly Nutrition Summary & 7-Bar Chart */}
+        <section aria-label="ملخص الأسبوع">
+          <WeeklySummaryCard
+            weekStart={weekStart}
+            selectedDate={selectedDate}
+            onSelectDay={setSelectedDate}
+            daySummaries={daySummaries}
+            dailyGoal={CALORIE_GOAL}
+          />
+        </section>
+
+        {/* Date context header */}
+        <div className="flex items-center justify-between px-1 pt-1">
+          <div className="flex items-center gap-2">
+            <h2 className="text-[17px] font-bold text-on-surface">{dateLabel}</h2>
+            <span className="text-[12px] text-on-surface-variant">
+              ({formatDayFull(selectedDate)})
+            </span>
+          </div>
+          <Link
+            href={`/add?date=${selectedDateKey}`}
+            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl bg-primary text-on-primary text-[12px] font-semibold active:scale-95 shadow-sm shadow-primary/20 transition-transform"
+          >
+            <span className="material-symbols-outlined text-[16px]">add</span>
+            <span>إضافة وجبة</span>
+          </Link>
+        </div>
+
+        {/* 3. Calorie Progress Ring Summary for Selected Date */}
         <section
-          aria-label="ملخص اليوم"
+          aria-label="ملخص السعرات لليوم المحدد"
           className="bg-surface-container-lowest rounded-[24px] p-5 shadow-sm border border-outline-variant/20 flex items-center gap-5"
         >
           <Ring value={totals.calories} goal={CALORIE_GOAL} />
           <div className="flex flex-col gap-1">
-            <span className="text-[13px] text-on-surface-variant">المتبقي اليوم</span>
-            <span className="text-[24px] font-bold text-primary">
-              {fmt(Math.max(0, CALORIE_GOAL - totals.calories))}
+            <span className="text-[13px] text-on-surface-variant">
+              {totals.calories <= CALORIE_GOAL ? "المتبقي لهذا اليوم" : "تجاوزت الهدف اليومي بـ"}
+            </span>
+            <span className={`text-[24px] font-bold ${totals.calories > CALORIE_GOAL ? "text-error" : "text-primary"}`}>
+              {fmt(Math.abs(CALORIE_GOAL - totals.calories))}
             </span>
             <span className="text-[12px] text-on-surface-variant">سعرة حرارية</span>
           </div>
         </section>
 
-        {/* Macronutrients breakdown */}
+        {/* Macronutrients breakdown for Selected Date */}
         <section aria-label="المغذيات" className="flex gap-3">
           <MacroCard label="بروتين" value={totals.protein} color="text-secondary" />
           <MacroCard label="كربوهيدرات" value={totals.carbs} color="text-tertiary" />
           <MacroCard label="دهون" value={totals.fat} color="text-primary" />
         </section>
 
-        {/* Today's Meals Timeline */}
-        <section aria-label="وجبات اليوم" className="flex flex-col gap-3">
+        {/* Meals Timeline for Selected Date */}
+        <section aria-label="وجبات اليوم المحدد" className="flex flex-col gap-3">
           <div className="flex items-center justify-between px-1">
-            <h2 className="text-[16px] font-bold text-on-surface">وجبات اليوم</h2>
+            <h3 className="text-[16px] font-bold text-on-surface">
+              وجبات {dateLabel}
+            </h3>
             {meals && meals.length > 0 && (
               <span className="text-[12px] text-on-surface-variant">
                 {meals.length} {meals.length === 1 ? "وجبة" : "وجبات"}
@@ -162,10 +296,27 @@ export default function Diary() {
               <span>{error}</span>
               <button
                 type="button"
-                onClick={loadData}
+                onClick={() => void loadData(selectedDate)}
                 className="text-[12px] font-bold underline ps-2"
               >
                 إعادة المحاولة
+              </button>
+            </div>
+          )}
+
+          {actionError && (
+            <div
+              role="alert"
+              className="p-3.5 rounded-xl bg-error-container text-on-error-container text-[13px] flex items-center justify-between"
+            >
+              <span>{actionError}</span>
+              <button
+                type="button"
+                onClick={() => setActionError(null)}
+                aria-label="إخفاء"
+                className="material-symbols-outlined text-[18px] ps-2"
+              >
+                close
               </button>
             </div>
           )}
@@ -179,18 +330,24 @@ export default function Diary() {
           )}
 
           {meals?.length === 0 && (
-            <div className="bg-surface-container-low rounded-2xl p-8 flex flex-col items-center gap-3 text-center border border-outline-variant/20">
-              <span className="material-symbols-outlined text-[42px] text-outline">restaurant</span>
+            <div className="bg-surface-container-low rounded-2xl p-7 flex flex-col items-center gap-3 text-center border border-outline-variant/20">
+              <span className="material-symbols-outlined text-[40px] text-outline">restaurant</span>
               <div className="flex flex-col gap-1">
-                <span className="text-[15px] font-bold text-on-surface">لم تسجّل أي وجبة اليوم بعد</span>
-                <p className="text-[13px] text-on-surface-variant">ابدأ يومك بتسجيل وجبتك الأولى لتحليل سعراتها تلقائياً</p>
+                <span className="text-[15px] font-bold text-on-surface">
+                  لا توجد وجبات مسجلة في هذا اليوم
+                </span>
+                <p className="text-[13px] text-on-surface-variant">
+                  {isSelectedToday
+                    ? "ابدأ يومك بتسجيل وجبتك الأولى لتحليل سعراتها تلقائياً"
+                    : "يمكنك تسجيل وجبة فاتتك في هذا اليوم بسهولة"}
+                </p>
               </div>
               <Link
-                href="/add"
-                className="mt-2 h-11 px-6 rounded-xl bg-primary text-on-primary text-[14px] font-semibold flex items-center gap-2 active:scale-95 shadow-md shadow-primary/20 transition-transform"
+                href={`/add?date=${selectedDateKey}`}
+                className="mt-1 h-11 px-6 rounded-xl bg-primary text-on-primary text-[14px] font-semibold flex items-center gap-2 active:scale-95 shadow-md shadow-primary/20 transition-transform"
               >
                 <span className="material-symbols-outlined text-[20px]">add</span>
-                <span>إضافة وجبة الآن</span>
+                <span>تسجيل وجبة لهذا اليوم</span>
               </Link>
             </div>
           )}
@@ -202,17 +359,28 @@ export default function Diary() {
                 const time = new Intl.DateTimeFormat("ar-SA", { hour: "numeric", minute: "2-digit" }).format(
                   new Date(m.eatenAt),
                 );
+                const confirming = confirmingId === m.id;
+                const deleting = deletingId === m.id;
                 return (
                   <li key={m.id} className="relative">
                     <span className="absolute -start-6 top-5 w-4 h-4 rounded-full bg-primary border-4 border-surface" />
-                    <article className="bg-surface-container-lowest rounded-2xl p-4 shadow-sm border border-outline-variant/20 flex flex-col gap-2.5">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <span className="material-symbols-outlined text-primary text-[20px]">{meta.icon}</span>
-                          <span className="text-[15px] font-bold text-on-surface">{meta.label}</span>
-                          <span className="text-[12px] text-on-surface-variant">{time}</span>
+                    <article
+                      className={`bg-surface-container-lowest rounded-2xl p-4 shadow-sm border border-outline-variant/20 flex flex-col gap-2.5 transition-opacity ${deleting ? "opacity-50" : ""}`}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex flex-col gap-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[12px] font-semibold bg-primary-fixed text-on-primary-fixed">
+                              <span className="material-symbols-outlined text-[14px]">{meta.icon}</span>
+                              <span>{meta.label}</span>
+                            </span>
+                            <span className="text-[12px] text-on-surface-variant">{time}</span>
+                          </div>
+                          {m.title && (
+                            <span className="text-[15px] font-bold text-on-surface truncate">{m.title}</span>
+                          )}
                         </div>
-                        <span className="text-[15px] font-bold text-on-surface">{fmt(m.totals.calories)} سعرة</span>
+                        <span className="text-[15px] font-bold text-on-surface shrink-0">{fmt(m.totals.calories)} سعرة</span>
                       </div>
                       <ul className="flex flex-col gap-1">
                         {m.items.map((it) => (
@@ -228,6 +396,58 @@ export default function Diary() {
                         بروتين {fmt(m.totals.protein)}g • كربوهيدرات {fmt(m.totals.carbs)}g • دهون{" "}
                         {fmt(m.totals.fat)}g
                       </div>
+
+                      {confirming ? (
+                        <div className="flex items-center gap-2 pt-1">
+                          <span className="flex-1 text-[13px] font-semibold text-on-error-container">
+                            حذف هذه الوجبة نهائياً؟
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setConfirmingId(null)}
+                            disabled={deleting}
+                            className="h-9 px-3 rounded-xl bg-surface-container-low text-on-surface-variant text-[13px] font-semibold active:scale-95 transition-transform disabled:opacity-50"
+                          >
+                            تراجع
+                          </button>
+                          <button
+                            id={`confirm-delete-${m.id}`}
+                            type="button"
+                            onClick={() => handleDelete(m.id)}
+                            disabled={deleting}
+                            className="h-9 px-3 rounded-xl bg-error text-white text-[13px] font-bold flex items-center gap-1.5 active:scale-95 transition-transform disabled:opacity-60"
+                          >
+                            {deleting && (
+                              <span className="w-3.5 h-3.5 rounded-full border-2 border-white/40 border-t-white animate-spin" aria-hidden />
+                            )}
+                            <span>{deleting ? "جارٍ الحذف..." : "نعم، احذف"}</span>
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2 pt-1">
+                          <button
+                            id={`edit-meal-${m.id}`}
+                            type="button"
+                            onClick={() => setEditing(m)}
+                            className="flex-1 h-9 rounded-xl bg-surface-container-low text-primary text-[13px] font-semibold flex items-center justify-center gap-1.5 active:scale-95 transition-transform"
+                          >
+                            <span className="material-symbols-outlined text-[18px]">edit</span>
+                            <span>تعديل</span>
+                          </button>
+                          <button
+                            id={`delete-meal-${m.id}`}
+                            type="button"
+                            onClick={() => {
+                              setActionError(null);
+                              setConfirmingId(m.id);
+                            }}
+                            className="flex-1 h-9 rounded-xl bg-surface-container-low text-error text-[13px] font-semibold flex items-center justify-center gap-1.5 active:scale-95 transition-transform"
+                          >
+                            <span className="material-symbols-outlined text-[18px]">delete</span>
+                            <span>حذف</span>
+                          </button>
+                        </div>
+                      )}
                     </article>
                   </li>
                 );
@@ -236,6 +456,18 @@ export default function Diary() {
           )}
         </section>
       </main>
+
+      {editing && (
+        <EditMealSheet
+          key={editing.id}
+          meal={editing}
+          onClose={() => setEditing(null)}
+          onSaved={async () => {
+            await loadData(selectedDate);
+            setEditing(null);
+          }}
+        />
+      )}
     </div>
   );
 }
