@@ -412,6 +412,12 @@ export default function ProfileSettings() {
   // Fetch the authoritative profile (Supabase → localStorage fallback).
   useEffect(() => {
     if (!userId) return;
+    const local = getCachedUserProfile(userId);
+    if (local && !touchedRef.current) {
+      setSaved(local);
+      setForm(local);
+      setLoaded(true);
+    }
     let ignore = false;
     void (async () => {
       const p = await getUserProfile(userId);

@@ -69,3 +69,41 @@ export interface MealDraft {
   /** Natural Arabic summary of what the model heard (voice) or saw (image). */
   transcribed_or_detected_description_ar?: string;
 }
+
+/** Input passed when asking the AI to refine or correct a single food item. */
+export interface SingleItemInput {
+  name?: string;
+  name_ar?: string;
+  name_en?: string;
+  grams?: number;
+  calories?: number;
+  protein?: number;
+  carbs?: number;
+  fat?: number;
+  per100g?: {
+    calories: number;
+    protein: number;
+    carbs: number;
+    fat: number;
+  };
+}
+
+/** Result returned when re-parsing or adding a single food item. */
+export interface ReparsedSingleItem {
+  name_ar: string;
+  name_en: string;
+  grams: number;
+  per100g: {
+    calories: number;
+    protein: number;
+    carbs: number;
+    fat: number;
+  };
+  calories: number;
+  protein: number;
+  carbs: number;
+  fat: number;
+  cooking_state?: CookingState;
+  notes?: string;
+}
+

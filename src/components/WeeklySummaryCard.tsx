@@ -72,6 +72,15 @@ export default function WeeklySummaryCard({
     };
   }, [weekDays, daySummaries, dailyGoal]);
 
+  const selectedKey = useMemo(() => localDateString(selectedDate), [selectedDate]);
+  const selectedDaySummary = useMemo(
+    () => daySummaries[selectedKey] ?? { calories: 0, protein: 0, carbs: 0, fat: 0, count: 0 },
+    [daySummaries, selectedKey],
+  );
+  const selectedProt = Math.round(selectedDaySummary.protein);
+  const selectedCarbs = Math.round(selectedDaySummary.carbs);
+  const selectedFat = Math.round(selectedDaySummary.fat);
+
   return (
     <div className="bg-surface-container-lowest rounded-[24px] p-4 shadow-sm border border-outline-variant/20 flex flex-col gap-3">
       {/* Header with collapse toggle */}
@@ -212,27 +221,30 @@ export default function WeeklySummaryCard({
             </div>
           </div>
 
-          {/* Average Macronutrients */}
-          <div className="flex items-center justify-around py-2.5 px-3 rounded-2xl bg-surface-container-low text-[12px]">
+          {/* Selected Day Macronutrients */}
+          <div
+            title="مغذيات اليوم المحدد"
+            className="flex items-center justify-around py-2.5 px-3 rounded-2xl bg-surface-container-low text-[12px]"
+          >
             <div className="flex items-center gap-1.5">
               <span className="w-2 h-2 rounded-full bg-secondary" />
               <span className="text-on-surface-variant">بروتين:</span>
-              <span className="font-bold text-secondary">{fmt(stats.avgProt)}g</span>
-              <span className="text-[10px] text-outline">/ {fmt(targets.target_protein_g)}g</span>
+              <span className="font-bold text-secondary tabular-nums">{fmt(selectedProt)}g</span>
+              <span className="text-[10px] text-outline tabular-nums">/ {fmt(targets.target_protein_g)}g</span>
             </div>
             <span className="text-outline-variant">•</span>
             <div className="flex items-center gap-1.5">
               <span className="w-2 h-2 rounded-full bg-tertiary" />
               <span className="text-on-surface-variant">كارب:</span>
-              <span className="font-bold text-tertiary">{fmt(stats.avgCarbs)}g</span>
-              <span className="text-[10px] text-outline">/ {fmt(targets.target_carbs_g)}g</span>
+              <span className="font-bold text-tertiary tabular-nums">{fmt(selectedCarbs)}g</span>
+              <span className="text-[10px] text-outline tabular-nums">/ {fmt(targets.target_carbs_g)}g</span>
             </div>
             <span className="text-outline-variant">•</span>
             <div className="flex items-center gap-1.5">
               <span className="w-2 h-2 rounded-full bg-primary" />
               <span className="text-on-surface-variant">دهون:</span>
-              <span className="font-bold text-primary">{fmt(stats.avgFat)}g</span>
-              <span className="text-[10px] text-outline">/ {fmt(targets.target_fat_g)}g</span>
+              <span className="font-bold text-primary tabular-nums">{fmt(selectedFat)}g</span>
+              <span className="text-[10px] text-outline tabular-nums">/ {fmt(targets.target_fat_g)}g</span>
             </div>
           </div>
         </div>

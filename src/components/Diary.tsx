@@ -13,6 +13,7 @@ import {
 import {
   getCachedUserProfile,
   getUserProfile,
+  isProfileConfigured,
   resolveTargets,
   sumMacros,
   type UserProfile,
@@ -105,7 +106,7 @@ function MacroCard({
 }
 
 export default function Diary() {
-  const { user, signOut } = useAuth();
+  const { user, loading: authLoading, signOut } = useAuth();
   const [selectedDate, setSelectedDate] = useState<Date>(() => new Date());
   const [meals, setMeals] = useState<DiaryMeal[] | null>(null);
   const [daySummaries, setDaySummaries] = useState<Record<string, DaySummary>>({});
@@ -121,26 +122,52 @@ export default function Diary() {
   const [profile, setProfile] = useState<UserProfile | null>(() =>
     userId ? getCachedUserProfile(userId) : null,
   );
+  const [isLoadingProfile, setIsLoadingProfile] = useState(true);
   const [profileChecked, setProfileChecked] = useState(false);
 
   useEffect(() => {
-    if (!userId) return;
+    if (authLoading) return;
+    if (!userId) {
+      setIsLoadingProfile(false);
+      setProfileChecked(true);
+      return;
+    }
+
+    // 1. Immediately seed from scoped cache if state is currently null
+    const local = getCachedUserProfile(userId);
+    if (local) {
+      setProfile(local);
+      setIsLoadingProfile(false);
+    }
+
     let ignore = false;
     void (async () => {
-      const p = await getUserProfile(userId);
-      if (!ignore) {
-        setProfile(p);
-        setProfileChecked(true);
+      try {
+        const p = await getUserProfile(userId);
+        if (!ignore) {
+          if (p) {
+            setProfile(p);
+          } else if (local) {
+            setProfile(local);
+          }
+          setProfileChecked(true);
+        }
+      } finally {
+        if (!ignore) {
+          setIsLoadingProfile(false);
+        }
       }
     })();
+
     return () => {
       ignore = true;
     };
-  }, [userId]);
+  }, [userId, authLoading]);
 
   const targets = resolveTargets(profile);
   const calorieGoal = targets.target_calories;
-  const showSetupBanner = profileChecked && profile === null;
+  const configured = isProfileConfigured(userId, profile);
+  const showSetupBanner = !authLoading && !isLoadingProfile && profileChecked && !configured;
 
   const today = useMemo(() => new Date(), []);
   const isSelectedToday = isSameDay(selectedDate, today);
@@ -443,7 +470,12 @@ export default function Diary() {
                   <li key={m.id} className="relative">
                     <span className="absolute -start-6 top-5 w-4 h-4 rounded-full bg-primary border-4 border-surface" />
                     <article
-                      className={`bg-surface-container-lowest rounded-2xl p-4 shadow-sm border border-outline-variant/20 flex flex-col gap-2.5 transition-opacity ${deleting ? "opacity-50" : ""}`}
+                      onClick={(e) => {
+                        const target = e.target as HTMLElement;
+                        if (target.closest("button") || target.closest("a")) return;
+                        setEditing(m);
+                      }}
+                      className={`bg-surface-container-lowest rounded-2xl p-4 shadow-sm border border-outline-variant/20 flex flex-col gap-2.5 transition-all cursor-pointer hover:border-primary/40 hover:shadow-md active:scale-[0.99] ${deleting ? "opacity-50 pointer-events-none" : ""}`}
                     >
                       <div className="flex items-start justify-between gap-2">
                         <div className="flex flex-col gap-1 min-w-0">

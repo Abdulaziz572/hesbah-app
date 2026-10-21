@@ -3,7 +3,14 @@ import {
   SchemaType,
   type ResponseSchema,
 } from "@google/generative-ai";
-import type { MealDraft, MealInput, MealInputType, MediaPayload } from "./types";
+import type {
+  MealDraft,
+  MealInput,
+  MealInputType,
+  MediaPayload,
+  ReparsedSingleItem,
+  SingleItemInput,
+} from "./types";
 
 const MODEL_NAME = "gemini-3.5-flash-lite";
 const SCHEMA_VERSION = "1.0";
@@ -183,6 +190,49 @@ const MEAL_DRAFT_SCHEMA: ResponseSchema = {
   ],
 };
 
+const SINGLE_ITEM_INSTRUCTION = `You are an expert food and nutrition analyzer for an Arabic nutrition tracking application.
+You are given a single food item (which may have an existing name, weight, and nutrients) and a correction or description prompt from the user in Arabic (e.g. "لا هذا فخذ دجاج مقلي مو صدور", "مطبوخ مع ملعقة سمن", "خلها 3 حبات سمبوسة لحم بالفرن", or a brand new item description).
+
+RULES:
+1. Identify the exact food item and its preparation/cooking state (e.g., grilled, fried, boiled, baked, raw, cooked).
+2. Set accurate "name_ar" (clear Arabic food name) and "name_en".
+3. Estimate the portion in grams ("grams"):
+   - If the user explicitly stated a new quantity (e.g. "3 حبات", "صحن كبير", "150 جرام"), calculate the grams accordingly.
+   - If the user only corrected the cooking method or ingredient type without specifying quantity, keep or sensibly adapt the current item's grams.
+   - For a new item without quantity specified, use a standard typical serving weight in grams (e.g. 1 apple ~ 150g, 1 cup ~ 240g).
+4. Fill "ai_estimated_per_100g" with accurate nutritional values per 100g:
+   - "kcal": calories per 100g
+   - "protein_g": protein in grams per 100g
+   - "carbs_g": carbohydrates in grams per 100g
+   - "fat_g": fat in grams per 100g
+5. Output ONLY a valid JSON object matching the schema. No markdown, no commentary.`;
+
+const SINGLE_ITEM_SCHEMA: ResponseSchema = {
+  type: SchemaType.OBJECT,
+  properties: {
+    name_ar: { type: SchemaType.STRING },
+    name_en: { type: SchemaType.STRING },
+    grams: { type: SchemaType.NUMBER },
+    cooking_state: {
+      type: SchemaType.STRING,
+      format: "enum",
+      enum: ["raw", "cooked", "dry", "unknown"],
+    },
+    ai_estimated_per_100g: {
+      type: SchemaType.OBJECT,
+      properties: {
+        kcal: { type: SchemaType.NUMBER },
+        protein_g: { type: SchemaType.NUMBER },
+        carbs_g: { type: SchemaType.NUMBER },
+        fat_g: { type: SchemaType.NUMBER },
+      },
+      required: ["kcal", "protein_g", "carbs_g", "fat_g"],
+    },
+    notes: { type: SchemaType.STRING },
+  },
+  required: ["name_ar", "name_en", "grams", "ai_estimated_per_100g"],
+};
+
 export class MealParser {
   private static getModel() {
     const apiKey = process.env.GEMINI_API_KEY;
@@ -297,4 +347,98 @@ export class MealParser {
     }
     return MealParser.parseMealInput({ image: { base64: base64Image, mimeType } });
   }
+
+  private static getSingleItemModel() {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      throw new Error("GEMINI_API_KEY environment variable is not set.");
+    }
+    const genAI = new GoogleGenerativeAI(apiKey);
+    return genAI.getGenerativeModel({
+      model: MODEL_NAME,
+      systemInstruction: SINGLE_ITEM_INSTRUCTION,
+      generationConfig: {
+        responseMimeType: "application/json",
+        responseSchema: SINGLE_ITEM_SCHEMA,
+        temperature: 0.2,
+      },
+    });
+  }
+
+  /**
+   * Reparse or refine a single food item based on user correction or description.
+   * If currentItem is provided, the model adjusts that item; if null/undefined, it parses a new single item.
+   */
+  static async reparseSingleItem(
+    currentItem: SingleItemInput | null | undefined,
+    correctionPrompt: string,
+  ): Promise<ReparsedSingleItem> {
+    const prompt = correctionPrompt.trim();
+    if (!prompt) {
+      throw new Error("MealParser: correction prompt is empty.");
+    }
+
+    const lines: string[] = [];
+    if (currentItem && (currentItem.name || currentItem.name_ar || currentItem.name_en)) {
+      lines.push("CURRENT FOOD ITEM DATA:");
+      lines.push(`- Name: ${currentItem.name_ar || currentItem.name || currentItem.name_en}`);
+      if (currentItem.grams) lines.push(`- Current Weight: ${currentItem.grams}g`);
+      if (currentItem.calories != null) lines.push(`- Current Calories: ${currentItem.calories} kcal`);
+      if (currentItem.per100g) {
+        lines.push(
+          `- Current Per 100g: ${currentItem.per100g.calories} kcal, ${currentItem.per100g.protein}g protein, ${currentItem.per100g.carbs}g carbs, ${currentItem.per100g.fat}g fat`,
+        );
+      }
+      lines.push("");
+      lines.push(`USER CORRECTION NOTE:\n"${prompt}"`);
+      lines.push(
+        "Apply the user's correction to this item, re-estimating portions and per-100g nutritional facts accordingly.",
+      );
+    } else {
+      lines.push(`NEW FOOD ITEM TO ANALYZE:\n"${prompt}"`);
+      lines.push(
+        "Extract this single food item, estimate realistic portion in grams, and calculate nutritional values per 100g.",
+      );
+    }
+
+    const result = await MealParser.getSingleItemModel().generateContent(lines.join("\n"));
+    const raw = result.response.text();
+    let parsed: any;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw new Error("MealParser: model returned invalid JSON for single item.");
+    }
+
+    const fallbackGrams = Math.max(1, Math.round(Number(currentItem?.grams) || 100));
+    const grams = Math.max(1, Math.min(5000, Math.round(Number(parsed.grams) || fallbackGrams)));
+
+    const est = parsed.ai_estimated_per_100g || {};
+    const p100 = {
+      calories: Math.max(0, Math.round(Number(est.kcal) || 0)),
+      protein: Math.max(0, Math.round((Number(est.protein_g) || 0) * 10) / 10),
+      carbs: Math.max(0, Math.round((Number(est.carbs_g) || 0) * 10) / 10),
+      fat: Math.max(0, Math.round((Number(est.fat_g) || 0) * 10) / 10),
+    };
+
+    const factor = grams / 100;
+    const calories = Math.round(p100.calories * factor);
+    const protein = Math.round(p100.protein * factor * 10) / 10;
+    const carbs = Math.round(p100.carbs * factor * 10) / 10;
+    const fat = Math.round(p100.fat * factor * 10) / 10;
+
+    return {
+      name_ar: String(parsed.name_ar || currentItem?.name_ar || currentItem?.name || "صنف غذائي"),
+      name_en: String(parsed.name_en || currentItem?.name_en || "Food item"),
+      grams,
+      per100g: p100,
+      calories,
+      protein,
+      carbs,
+      fat,
+      cooking_state: parsed.cooking_state,
+      notes: parsed.notes,
+    };
+  }
 }
+

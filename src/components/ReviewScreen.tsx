@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { guessMealType, saveMeal, type MealType } from "@/src/lib/meals";
+import { guessMealType, saveMealItems, type MealType } from "@/src/lib/meals";
 import type { MealDraft } from "@/src/lib/ai/types";
 import {
   calcMacros,
@@ -10,7 +10,7 @@ import {
   type ReviewItem,
 } from "@/src/lib/nutrition";
 import MealTypePicker from "./MealTypePicker";
-import GramsStepper from "./GramsStepper";
+import MealItemsEditor, { type MealEditorItem } from "./MealItemsEditor";
 
 interface Props {
   draft: MealDraft;
@@ -21,41 +21,44 @@ interface Props {
 
 const fmt = (n: number) => Math.round(n).toLocaleString("en-US");
 
-function QualityBadge({ item }: { item: ReviewItem }) {
-  if (!item.food) {
-    return (
-      <span className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full text-[11px] font-medium bg-error-container text-on-error-container">
-        <span className="material-symbols-outlined text-[12px]">help</span>
-        <span>غير موجود</span>
-      </span>
-    );
-  }
-  if (item.food.source === "ai") {
-    return (
-      <span className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full text-[11px] font-medium bg-secondary-container/15 text-secondary">
-        <span className="material-symbols-outlined text-[12px]">auto_awesome</span>
-        <span>تقدير ذكي</span>
-      </span>
-    );
-  }
-  const verified =
-    item.parsed.confidence === "high" && item.parsed.quantity.basis === "user_stated";
-  return verified ? (
-    <span className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full text-[11px] font-medium bg-primary-fixed text-on-primary-fixed">
-      <span className="material-symbols-outlined text-[12px]">check</span>
-      <span>موثّق</span>
-    </span>
-  ) : (
-    <span className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full text-[11px] font-medium bg-tertiary-fixed text-on-tertiary-fixed">
-      <span>≈</span>
-      <span>تقديري</span>
-    </span>
-  );
-}
-
 export default function ReviewScreen({ draft, initialRows, targetDate, onBack }: Props) {
-  const [rows, setRows] = useState<ReviewItem[]>(initialRows);
-  const [grams, setGrams] = useState<number[]>(() => initialRows.map((r) => r.grams));
+  const [items, setItems] = useState<MealEditorItem[]>(() =>
+    initialRows.map((r, i) => {
+      const macros = calcMacros(r.food, r.grams);
+      const factor = (r.grams || 1) / 100;
+      const p100 = r.food?.per100g ?? {
+        calories: Math.round(macros.calories / factor),
+        protein: Math.round((macros.protein / factor) * 10) / 10,
+        carbs: Math.round((macros.carbs / factor) * 10) / 10,
+        fat: Math.round((macros.fat / factor) * 10) / 10,
+      };
+
+      let badge: MealEditorItem["badge"] = undefined;
+      if (!r.food) {
+        badge = { type: "unmatched", label: "غير موجود" };
+      } else if (r.food.source === "ai") {
+        badge = { type: "ai_estimate", label: "تقدير ذكي" };
+      } else if (r.parsed.confidence === "high" && r.parsed.quantity.basis === "user_stated") {
+        badge = { type: "verified", label: "موثّق" };
+      } else {
+        badge = { type: "ai_estimate", label: "تقديري" };
+      }
+
+      return {
+        id: r.key || `item-${i}`,
+        name: r.parsed.name_ar || r.parsed.name_en || r.food?.name_ar || r.food?.name_en || "صنف",
+        grams: r.grams,
+        per100g: p100,
+        calories: Math.round(macros.calories),
+        protein: Math.round(macros.protein * 10) / 10,
+        carbs: Math.round(macros.carbs * 10) / 10,
+        fat: Math.round(macros.fat * 10) / 10,
+        badge,
+        originalFoodId: r.food && r.food.source === "db" ? r.food.id : null,
+      };
+    }),
+  );
+
   const [mealType, setMealType] = useState<MealType>(() => guessMealType());
   const [title, setTitle] = useState(() => draft.dish_name?.ar || draft.dish_name?.en || "");
   const [confirmed, setConfirmed] = useState(true);
@@ -68,7 +71,20 @@ export default function ReviewScreen({ draft, initialRows, targetDate, onBack }:
     setSaving(true);
     setSaveError(null);
     try {
-      await saveMeal(rows, grams, { mealType, title, targetDate });
+      await saveMealItems(
+        items.map((it) => ({
+          name: it.name,
+          grams: it.grams,
+          per100g: it.per100g,
+          calories: it.calories,
+          protein: it.protein,
+          carbs: it.carbs,
+          fat: it.fat,
+          food_id: it.originalFoodId,
+          quality: it.badge?.type === "verified" ? "db" : "ai_estimate",
+        })),
+        { mealType, title, targetDate },
+      );
       setSaved(true);
       router.push("/");
     } catch (e: unknown) {
@@ -80,30 +96,25 @@ export default function ReviewScreen({ draft, initialRows, targetDate, onBack }:
     }
   }
 
-  const setAt = (i: number, v: number) =>
-    setGrams((g) => g.map((x, idx) => (idx === i ? Math.max(0, Math.min(5000, v)) : x)));
-
-  const removeAt = (i: number) => {
-    setRows((r) => r.filter((_, idx) => idx !== i));
-    setGrams((g) => g.filter((_, idx) => idx !== i));
-  };
-
-  const perItem = useMemo(
-    () => rows.map((r, i) => calcMacros(r.food, grams[i])),
-    [rows, grams],
+  const total = useMemo(
+    () =>
+      sumMacros(
+        items.map((it) => ({
+          calories: it.calories,
+          protein: it.protein,
+          carbs: it.carbs,
+          fat: it.fat,
+        })),
+      ),
+    [items],
   );
-  const total = useMemo(() => sumMacros(perItem), [perItem]);
 
-  const estimatedCount = rows.filter(
-    (r) =>
-      !r.food ||
-      r.food.source === "ai" ||
-      r.parsed.confidence !== "high" ||
-      r.parsed.quantity.basis !== "user_stated",
+  const estimatedCount = items.filter(
+    (it) => it.badge?.type !== "verified",
   ).length;
-  const estimatedPct = rows.length ? Math.round((estimatedCount / rows.length) * 100) : 0;
-  const unmatched = rows.filter((r) => !r.food).length;
-  const aiCount = rows.filter((r) => r.food?.source === "ai").length;
+  const estimatedPct = items.length ? Math.round((estimatedCount / items.length) * 100) : 0;
+  const unmatched = items.filter((it) => it.badge?.type === "unmatched").length;
+  const aiCount = items.filter((it) => it.badge?.type === "ai_estimate" || it.badge?.type === "ai_edited").length;
 
   return (
     <section className="flex flex-col gap-4 w-full" aria-labelledby="review-title">
@@ -142,7 +153,7 @@ export default function ReviewScreen({ draft, initialRows, targetDate, onBack }:
             <span className="material-symbols-outlined text-[13px]">auto_awesome</span>
             <span>مسودة ذكية</span>
           </span>
-          <span className="text-[12px] text-on-surface-variant">رصد {rows.length} مكونات</span>
+          <span className="text-[12px] text-on-surface-variant">رصد {items.length} مكونات</span>
         </div>
         <label htmlFor="meal-title" className="sr-only">عنوان الوجبة</label>
         <div className="flex items-center gap-2 rounded-xl bg-surface-container-low px-3 focus-within:ring-2 focus-within:ring-primary/40">
@@ -197,61 +208,13 @@ export default function ReviewScreen({ draft, initialRows, targetDate, onBack }:
         </div>
       )}
 
-      <div className="flex flex-col gap-3">
+      <div className="flex flex-col gap-2">
         <div className="flex items-center justify-between px-1">
           <span className="text-[15px] font-bold text-on-surface">المكونات المرصودة</span>
-          <span className="text-[11px] text-on-surface-variant">قابلة للتعديل</span>
+          <span className="text-[11px] text-on-surface-variant">قابلة للتعديل والإضافة بالـ AI</span>
         </div>
 
-        {rows.length === 0 && (
-          <div className="p-4 rounded-2xl bg-surface-container-low text-[13px] text-on-surface-variant text-center">
-            لا توجد مكونات لحفظها. ارجع وجرّب وصفاً آخر.
-          </div>
-        )}
-
-        {rows.map((r, i) => {
-          const m = perItem[i];
-          return (
-            <div key={r.key} className="bg-surface-container-lowest p-3.5 rounded-2xl shadow-sm flex flex-col gap-2.5">
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2 flex-wrap min-w-0">
-                  <span className="text-[16px] font-bold text-on-surface">
-                    {r.parsed.name_ar || r.parsed.name_en}
-                  </span>
-                  <QualityBadge item={r} />
-                </div>
-                <div className="flex items-center gap-1.5 shrink-0">
-                  <span className="text-[13px] text-on-surface-variant font-medium">
-                    {fmt(m.calories)} سعرة
-                  </span>
-                  <button
-                    id={`remove-item-${i}`}
-                    type="button"
-                    aria-label={`حذف ${r.parsed.name_ar || r.parsed.name_en}`}
-                    onClick={() => removeAt(i)}
-                    disabled={saving}
-                    className="w-8 h-8 rounded-full text-on-surface-variant hover:bg-error-container hover:text-on-error-container flex items-center justify-center active:scale-90 transition-all disabled:opacity-50"
-                  >
-                    <span className="material-symbols-outlined text-[20px]">delete</span>
-                  </button>
-                </div>
-              </div>
-
-              <div className="flex items-center justify-between pt-1 gap-2">
-                <span className="text-[13px] text-secondary font-semibold">
-                  بروتين {fmt(m.protein)}g • كربوهيدرات {fmt(m.carbs)}g • دهون {fmt(m.fat)}g
-                </span>
-                <GramsStepper id={`grams-${i}`} value={grams[i]} onChange={(v) => setAt(i, v)} disabled={saving} />
-              </div>
-
-              {r.parsed.quantity.grams_max > 0 && (
-                <span className="text-[11px] text-outline">
-                  تقدير الذكاء الاصطناعي: {fmt(r.parsed.quantity.grams_min)}–{fmt(r.parsed.quantity.grams_max)}g
-                </span>
-              )}
-            </div>
-          );
-        })}
+        <MealItemsEditor items={items} onChange={setItems} disabled={saving} />
       </div>
 
       {draft.possible_hidden_items?.length > 0 && (
@@ -319,7 +282,7 @@ export default function ReviewScreen({ draft, initialRows, targetDate, onBack }:
         <button
           id="save-meal-btn"
           type="button"
-          disabled={!confirmed || rows.length === 0 || saved || saving}
+          disabled={!confirmed || items.length === 0 || saved || saving}
           onClick={handleSave}
           className="w-full h-12 rounded-xl bg-primary hover:bg-primary-container text-on-primary font-semibold text-[16px] flex items-center justify-center gap-2 active:scale-[0.98] shadow-md shadow-primary/20 transition-all disabled:opacity-50 disabled:shadow-none"
         >

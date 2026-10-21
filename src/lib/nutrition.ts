@@ -221,7 +221,9 @@ export function resolveTargets(profile: UserProfile | null): DailyTargets {
   };
 }
 
-const PROFILE_CACHE_KEY = "hesbah_user_profile";
+export const getProfileCacheKey = (userId: string) => `hesbah_user_profile_${userId}`;
+export const getProfileConfiguredKey = (userId: string) => `hesbah_profile_configured_${userId}`;
+const LEGACY_PROFILE_CACHE_KEY = "hesbah_user_profile";
 
 const pick = <T extends string>(v: unknown, allowed: readonly T[], fallback: T): T =>
   allowed.includes(v as T) ? (v as T) : fallback;
@@ -254,24 +256,64 @@ function normalizeProfile(row: Record<string, unknown>, userId: string): UserPro
   };
 }
 
+/** Check if the user has explicitly configured their profile. */
+export function isProfileConfigured(userId: string, profile?: UserProfile | null): boolean {
+  if (!userId) return false;
+  if (typeof window !== "undefined") {
+    if (window.localStorage.getItem(getProfileConfiguredKey(userId)) === "true") {
+      return true;
+    }
+  }
+  if (profile) {
+    if (profile.is_custom_targets) return true;
+    if (profile.updated_at) return true;
+    const diff =
+      profile.gender !== DEFAULT_STATS.gender ||
+      profile.age !== DEFAULT_STATS.age ||
+      profile.height_cm !== DEFAULT_STATS.height_cm ||
+      profile.weight_kg !== DEFAULT_STATS.weight_kg ||
+      profile.activity_level !== DEFAULT_STATS.activity_level ||
+      profile.goal_type !== DEFAULT_STATS.goal_type ||
+      profile.target_calories !== DEFAULT_TARGETS.target_calories;
+    if (diff) return true;
+  }
+  const cached = getCachedUserProfile(userId);
+  if (cached && (cached.updated_at || cached.is_custom_targets)) return true;
+  return false;
+}
+
 /** Synchronous read of the locally cached profile (null if absent or for another account). */
 export function getCachedUserProfile(userId: string): UserProfile | null {
-  if (typeof window === "undefined") return null;
+  if (typeof window === "undefined" || !userId) return null;
   try {
-    const raw = window.localStorage.getItem(PROFILE_CACHE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    if (parsed?.user_id !== userId) return null;
-    return normalizeProfile(parsed, userId);
+    // 1. Try scoped key first
+    const scopedRaw = window.localStorage.getItem(getProfileCacheKey(userId));
+    if (scopedRaw) {
+      const parsed = JSON.parse(scopedRaw) as Record<string, unknown>;
+      return normalizeProfile(parsed, userId);
+    }
+    // 2. Fallback to legacy un-scoped key and migrate if matched
+    const legacyRaw = window.localStorage.getItem(LEGACY_PROFILE_CACHE_KEY);
+    if (legacyRaw) {
+      const parsed = JSON.parse(legacyRaw) as Record<string, unknown>;
+      if (parsed?.user_id === userId || !parsed?.user_id) {
+        const norm = normalizeProfile(parsed, userId);
+        writeCache(norm);
+        return norm;
+      }
+    }
+    return null;
   } catch {
     return null;
   }
 }
 
 function writeCache(profile: UserProfile) {
-  if (typeof window === "undefined") return;
+  if (typeof window === "undefined" || !profile?.user_id) return;
   try {
-    window.localStorage.setItem(PROFILE_CACHE_KEY, JSON.stringify(profile));
+    window.localStorage.setItem(getProfileCacheKey(profile.user_id), JSON.stringify(profile));
+    window.localStorage.setItem(getProfileConfiguredKey(profile.user_id), "true");
+    window.localStorage.setItem(LEGACY_PROFILE_CACHE_KEY, JSON.stringify(profile));
   } catch {
     /* storage full or unavailable */
   }
@@ -301,19 +343,18 @@ function toRow(p: UserProfile) {
  * Returns null when the user has never saved a profile.
  */
 export async function getUserProfile(userId: string): Promise<UserProfile | null> {
+  if (!userId) return null;
   const cached = getCachedUserProfile(userId);
   try {
+    // 1. Try public.user_profiles
     const { data, error } = await supabase
       .from("user_profiles")
       .select("*")
       .eq("user_id", userId)
       .maybeSingle();
 
-    if (error) throw error;
-
-    if (data) {
+    if (!error && data) {
       const remote = normalizeProfile(data as Record<string, unknown>, userId);
-      // Keep a locally newer save (made while offline) instead of overwriting it.
       const localTime = cached?.updated_at ? Date.parse(cached.updated_at) : NaN;
       const remoteTime = remote.updated_at ? Date.parse(remote.updated_at) : NaN;
       if (cached && localTime > remoteTime) {
@@ -324,9 +365,36 @@ export async function getUserProfile(userId: string): Promise<UserProfile | null
       return remote;
     }
 
-    // No row yet: push a locally saved profile up so it syncs once the table exists.
+    // 2. Fallback to public.profiles.interim_targets if user_profiles table is not ready
+    try {
+      const { data: pData, error: pErr } = await supabase
+        .from("profiles")
+        .select("interim_targets")
+        .eq("id", userId)
+        .maybeSingle();
+      if (!pErr && pData?.interim_targets && typeof pData.interim_targets === "object") {
+        const remote = normalizeProfile(pData.interim_targets as Record<string, unknown>, userId);
+        writeCache(remote);
+        return remote;
+      }
+    } catch {
+      // ignore
+    }
+
+    // 3. No remote row yet: if cached exists, attempt to push up and return it
     if (cached) {
-      void supabase.from("user_profiles").upsert(toRow(cached), { onConflict: "user_id" });
+      void (async () => {
+        try {
+          await supabase.from("user_profiles").upsert(toRow(cached), { onConflict: "user_id" });
+        } catch {
+          // ignore
+        }
+        try {
+          await supabase.from("profiles").upsert({ id: userId, interim_targets: toRow(cached) });
+        } catch {
+          // ignore
+        }
+      })();
     }
     return cached;
   } catch (e) {
@@ -345,19 +413,40 @@ export interface SaveProfileResult {
 export async function saveUserProfile(profile: UserProfile): Promise<SaveProfileResult> {
   const stamped: UserProfile = { ...profile, updated_at: new Date().toISOString() };
   writeCache(stamped);
+  if (typeof window !== "undefined") {
+    window.localStorage.setItem(getProfileConfiguredKey(profile.user_id), "true");
+  }
+  let synced = false;
+  let resultProfile = stamped;
+
   try {
     const { data, error } = await supabase
       .from("user_profiles")
       .upsert(toRow(stamped), { onConflict: "user_id" })
       .select()
       .maybeSingle();
-    if (error) throw error;
-    // Cache the server's copy so local and remote timestamps agree.
-    const saved = data ? normalizeProfile(data as Record<string, unknown>, profile.user_id) : stamped;
-    writeCache(saved);
-    return { profile: saved, synced: true };
+    if (!error && data) {
+      synced = true;
+      resultProfile = normalizeProfile(data as Record<string, unknown>, profile.user_id);
+      writeCache(resultProfile);
+      return { profile: resultProfile, synced: true };
+    }
   } catch (e) {
-    console.warn("[profile] saved locally only:", e);
-    return { profile: stamped, synced: false };
+    console.warn("[profile] user_profiles upsert failed:", e);
   }
+
+  // Also persist to public.profiles.interim_targets as resilient cloud backup
+  try {
+    const { error: pErr } = await supabase.from("profiles").upsert({
+      id: profile.user_id,
+      interim_targets: toRow(stamped),
+    });
+    if (!pErr) {
+      synced = true;
+    }
+  } catch {
+    // fallback ignore
+  }
+
+  return { profile: resultProfile, synced };
 }

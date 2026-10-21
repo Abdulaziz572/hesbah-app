@@ -52,14 +52,48 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Request body too large" }, { status: 413 });
   }
 
-  let body: { text?: unknown; audio?: unknown; image?: unknown };
+  let body: Record<string, unknown>;
   try {
-    body = await request.json();
+    body = (await request.json()) as Record<string, unknown>;
   } catch {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
   if (typeof body !== "object" || body === null) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+
+  // Handle single-item AI re-prompting or single-item creation
+  if (body.action === "reparse_item") {
+    const prompt =
+      typeof body.prompt === "string"
+        ? body.prompt.trim()
+        : typeof body.text === "string"
+        ? body.text.trim()
+        : "";
+
+    if (!prompt) {
+      return NextResponse.json(
+        { error: "يجب تقديم وصف أو تعديل للمكون (prompt)" },
+        { status: 400 },
+      );
+    }
+
+    const currentItem =
+      body.item && typeof body.item === "object"
+        ? (body.item as import("../../../src/lib/ai/types").SingleItemInput)
+        : null;
+
+    try {
+      const result = await MealParser.reparseSingleItem(currentItem, prompt);
+      return NextResponse.json(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to reparse item";
+      console.error("[test-ai] reparseSingleItem failed:", error);
+      return NextResponse.json(
+        { error: "تعذّر تعديل المكون بالذكاء الاصطناعي", details: message },
+        { status: 500 },
+      );
+    }
   }
 
   const text = typeof body.text === "string" ? body.text.trim() : "";
