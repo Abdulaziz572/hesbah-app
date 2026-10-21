@@ -10,7 +10,13 @@ import {
   type DaySummary,
   type DiaryMeal,
 } from "@/src/lib/meals";
-import { sumMacros } from "@/src/lib/nutrition";
+import {
+  getCachedUserProfile,
+  getUserProfile,
+  resolveTargets,
+  sumMacros,
+  type UserProfile,
+} from "@/src/lib/nutrition";
 import { useAuth } from "@/src/context/AuthContext";
 import {
   addDays,
@@ -27,8 +33,6 @@ import WeeklySummaryCard from "./WeeklySummaryCard";
 import EditMealSheet from "./EditMealSheet";
 import ThemeToggle from "./ThemeToggle";
 
-/** Daily target calories (can be configured per profile in future). */
-const CALORIE_GOAL = 2000;
 
 const fmt = (n: number) => Math.round(n).toLocaleString("en-US");
 
@@ -67,11 +71,35 @@ function Ring({ value, goal }: { value: number; goal: number }) {
   );
 }
 
-function MacroCard({ label, value, color }: { label: string; value: number; color: string }) {
+function MacroCard({
+  label,
+  value,
+  goal,
+  color,
+  bar,
+}: {
+  label: string;
+  value: number;
+  goal: number;
+  color: string;
+  bar: string;
+}) {
+  const pct = goal > 0 ? Math.min(100, Math.round((value / goal) * 100)) : 0;
   return (
     <div className="flex-1 bg-surface-container-lowest rounded-2xl p-3 shadow-sm flex flex-col items-center gap-0.5 border border-outline-variant/20">
-      <span className={`text-[18px] font-bold ${color}`}>{fmt(value)}g</span>
+      <span className={`text-[18px] font-bold tabular-nums ${color}`}>{fmt(value)}g</span>
       <span className="text-[12px] text-on-surface-variant">{label}</span>
+      <div
+        className="w-full h-1 mt-1.5 rounded-full bg-surface-container overflow-hidden"
+        role="progressbar"
+        aria-label={`${label} من الهدف`}
+        aria-valuemin={0}
+        aria-valuemax={goal}
+        aria-valuenow={Math.round(value)}
+      >
+        <div className={`h-full rounded-full ${bar} transition-[width] duration-500`} style={{ width: `${pct}%` }} />
+      </div>
+      <span className="text-[11px] text-outline tabular-nums">من {fmt(goal)}g</span>
     </div>
   );
 }
@@ -87,6 +115,32 @@ export default function Diary() {
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+
+  // Daily targets: seeded from the local cache for an instant first paint, then refreshed.
+  const userId = user?.id ?? "";
+  const [profile, setProfile] = useState<UserProfile | null>(() =>
+    userId ? getCachedUserProfile(userId) : null,
+  );
+  const [profileChecked, setProfileChecked] = useState(false);
+
+  useEffect(() => {
+    if (!userId) return;
+    let ignore = false;
+    void (async () => {
+      const p = await getUserProfile(userId);
+      if (!ignore) {
+        setProfile(p);
+        setProfileChecked(true);
+      }
+    })();
+    return () => {
+      ignore = true;
+    };
+  }, [userId]);
+
+  const targets = resolveTargets(profile);
+  const calorieGoal = targets.target_calories;
+  const showSetupBanner = profileChecked && profile === null;
 
   const today = useMemo(() => new Date(), []);
   const isSelectedToday = isSameDay(selectedDate, today);
@@ -219,6 +273,27 @@ export default function Diary() {
       <main className="flex-1 px-4 pt-3 flex flex-col gap-4">
         <h1 className="sr-only">اليوميات</h1>
 
+        {showSetupBanner && (
+          <Link
+            id="profile-setup-banner"
+            href="/profile"
+            className="flex items-center gap-3 p-3.5 rounded-2xl bg-primary-fixed/40 dark:bg-primary-fixed/60 border border-primary/20 text-on-surface active:scale-[0.99] transition-transform focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+          >
+            <span
+              aria-hidden="true"
+              className="w-9 h-9 shrink-0 rounded-xl bg-primary text-on-primary flex items-center justify-center"
+            >
+              <span className="material-symbols-outlined text-[20px]">calculate</span>
+            </span>
+            <span className="flex-1 min-w-0 flex flex-col">
+              <span className="text-[14px] font-semibold">اضبط بيانات جسمك وهدفك لحساب سعراتك بدقة ←</span>
+              <span className="text-[12px] text-on-surface-variant">
+                الهدف الحالي افتراضي ({fmt(calorieGoal)} سعرة)
+              </span>
+            </span>
+          </Link>
+        )}
+
         {/* 1. Calendar History: Interactive Week Strip & Month Modal */}
         <section aria-label="التاريخ والتقويم" className="bg-surface-container-lowest rounded-[24px] p-3 shadow-sm border border-outline-variant/20">
           <CalendarPicker
@@ -236,7 +311,7 @@ export default function Diary() {
             selectedDate={selectedDate}
             onSelectDay={setSelectedDate}
             daySummaries={daySummaries}
-            dailyGoal={CALORIE_GOAL}
+            targets={targets}
           />
         </section>
 
@@ -262,13 +337,13 @@ export default function Diary() {
           aria-label="ملخص السعرات لليوم المحدد"
           className="bg-surface-container-lowest rounded-[24px] p-5 shadow-sm border border-outline-variant/20 flex items-center gap-5"
         >
-          <Ring value={totals.calories} goal={CALORIE_GOAL} />
+          <Ring value={totals.calories} goal={calorieGoal} />
           <div className="flex flex-col gap-1">
             <span className="text-[13px] text-on-surface-variant">
-              {totals.calories <= CALORIE_GOAL ? "المتبقي لهذا اليوم" : "تجاوزت الهدف اليومي بـ"}
+              {totals.calories <= calorieGoal ? "المتبقي لهذا اليوم" : "تجاوزت الهدف اليومي بـ"}
             </span>
-            <span className={`text-[24px] font-bold ${totals.calories > CALORIE_GOAL ? "text-error" : "text-primary"}`}>
-              {fmt(Math.abs(CALORIE_GOAL - totals.calories))}
+            <span className={`text-[24px] font-bold ${totals.calories > calorieGoal ? "text-error" : "text-primary"}`}>
+              {fmt(Math.abs(calorieGoal - totals.calories))}
             </span>
             <span className="text-[12px] text-on-surface-variant">سعرة حرارية</span>
           </div>
@@ -276,9 +351,9 @@ export default function Diary() {
 
         {/* Macronutrients breakdown for Selected Date */}
         <section aria-label="المغذيات" className="flex gap-3">
-          <MacroCard label="بروتين" value={totals.protein} color="text-secondary" />
-          <MacroCard label="كربوهيدرات" value={totals.carbs} color="text-tertiary" />
-          <MacroCard label="دهون" value={totals.fat} color="text-primary" />
+          <MacroCard label="بروتين" value={totals.protein} goal={targets.target_protein_g} color="text-secondary" bar="bg-secondary" />
+          <MacroCard label="كربوهيدرات" value={totals.carbs} goal={targets.target_carbs_g} color="text-tertiary" bar="bg-tertiary" />
+          <MacroCard label="دهون" value={totals.fat} goal={targets.target_fat_g} color="text-primary" bar="bg-primary" />
         </section>
 
         {/* Meals Timeline for Selected Date */}

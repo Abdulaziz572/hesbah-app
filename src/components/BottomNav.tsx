@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 const TABS = [
   { href: "/", label: "اليوميات", icon: "book_2" },
   { href: "/add", label: "إضافة وجبة", icon: "add_circle" },
+  { href: "/profile", label: "حسابي", icon: "person" },
 ];
 
 export default function BottomNav() {

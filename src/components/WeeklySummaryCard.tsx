@@ -3,13 +3,15 @@
 import { useMemo, useState } from "react";
 import { AR_WEEKDAYS_SHORT, addDays, eachDay, isSameDay, localDateString } from "@/src/lib/dates";
 import type { DaySummary } from "@/src/lib/meals";
+import type { DailyTargets } from "@/src/lib/nutrition";
 
 interface Props {
   weekStart: Date;
   selectedDate: Date;
   onSelectDay: (d: Date) => void;
   daySummaries: Record<string, DaySummary>;
-  dailyGoal: number;
+  targets: DailyTargets;
+  dailyGoal?: number;
 }
 
 const fmt = (n: number) => Math.round(n).toLocaleString("en-US");
@@ -19,8 +21,10 @@ export default function WeeklySummaryCard({
   selectedDate,
   onSelectDay,
   daySummaries,
-  dailyGoal,
+  targets,
+  dailyGoal: propDailyGoal,
 }: Props) {
+  const dailyGoal = propDailyGoal ?? targets.target_calories;
   const [collapsed, setCollapsed] = useState(false);
 
   const weekDays = useMemo(() => eachDay(weekStart, addDays(weekStart, 6)), [weekStart]);
@@ -214,18 +218,21 @@ export default function WeeklySummaryCard({
               <span className="w-2 h-2 rounded-full bg-secondary" />
               <span className="text-on-surface-variant">بروتين:</span>
               <span className="font-bold text-secondary">{fmt(stats.avgProt)}g</span>
+              <span className="text-[10px] text-outline">/ {fmt(targets.target_protein_g)}g</span>
             </div>
             <span className="text-outline-variant">•</span>
             <div className="flex items-center gap-1.5">
               <span className="w-2 h-2 rounded-full bg-tertiary" />
               <span className="text-on-surface-variant">كارب:</span>
               <span className="font-bold text-tertiary">{fmt(stats.avgCarbs)}g</span>
+              <span className="text-[10px] text-outline">/ {fmt(targets.target_carbs_g)}g</span>
             </div>
             <span className="text-outline-variant">•</span>
             <div className="flex items-center gap-1.5">
               <span className="w-2 h-2 rounded-full bg-primary" />
               <span className="text-on-surface-variant">دهون:</span>
               <span className="font-bold text-primary">{fmt(stats.avgFat)}g</span>
+              <span className="text-[10px] text-outline">/ {fmt(targets.target_fat_g)}g</span>
             </div>
           </div>
         </div>
