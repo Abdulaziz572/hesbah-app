@@ -276,7 +276,7 @@ export default function DescribeScreen({ onAnalyze, loading, error }: Props) {
                 type="button"
                 onClick={() => void stopAndAnalyze()}
                 disabled={preparing}
-                className="flex-1 h-11 rounded-xl bg-error text-white text-[14px] font-bold flex items-center justify-center gap-2 shadow-md shadow-error/30 active:scale-[0.98] transition-all disabled:opacity-60"
+                className="flex-1 h-11 rounded-xl bg-error text-on-error text-[14px] font-bold flex items-center justify-center gap-2 shadow-md shadow-error/30 active:scale-[0.98] transition-all disabled:opacity-60"
               >
                 <span className="material-symbols-outlined text-[20px]">stop_circle</span>
                 <span>إيقاف وتحليل</span>

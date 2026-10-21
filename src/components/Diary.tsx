@@ -25,6 +25,7 @@ import {
 import CalendarPicker from "./CalendarPicker";
 import WeeklySummaryCard from "./WeeklySummaryCard";
 import EditMealSheet from "./EditMealSheet";
+import ThemeToggle from "./ThemeToggle";
 
 /** Daily target calories (can be configured per profile in future). */
 const CALORIE_GOAL = 2000;
@@ -198,6 +199,8 @@ export default function Diary() {
           {refreshing && (
             <span className="w-4 h-4 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
           )}
+
+          <ThemeToggle />
 
           {user && (
             <button
@@ -415,7 +418,7 @@ export default function Diary() {
                             type="button"
                             onClick={() => handleDelete(m.id)}
                             disabled={deleting}
-                            className="h-9 px-3 rounded-xl bg-error text-white text-[13px] font-bold flex items-center gap-1.5 active:scale-95 transition-transform disabled:opacity-60"
+                            className="h-9 px-3 rounded-xl bg-error text-on-error text-[13px] font-bold flex items-center gap-1.5 active:scale-95 transition-transform disabled:opacity-60"
                           >
                             {deleting && (
                               <span className="w-3.5 h-3.5 rounded-full border-2 border-white/40 border-t-white animate-spin" aria-hidden />

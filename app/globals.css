@@ -1,44 +1,138 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Light palette (Nourish Native) */
+:root {
+  color-scheme: light;
+  --outline: #6d7a72;
+  --outline-variant: #bccac0;
+  --surface: #f8f9ff;
+  --surface-dim: #cbdbf5;
+  --surface-container-lowest: #ffffff;
+  --surface-container-low: #eff4ff;
+  --surface-container: #e5eeff;
+  --surface-container-high: #dce9ff;
+  --surface-container-highest: #d3e4fe;
+  --on-surface: #0b1c30;
+  --on-surface-variant: #3d4a42;
+  --inverse-surface: #213145;
+  --inverse-on-surface: #eaf1ff;
+  --primary: #006948;
+  --on-primary: #ffffff;
+  --primary-container: #00855d;
+  --primary-fixed: #85f8c4;
+  --primary-fixed-dim: #68dba9;
+  --on-primary-fixed: #002114;
+  --secondary: #4648d4;
+  --on-secondary: #ffffff;
+  --secondary-container: #6063ee;
+  --tertiary: #825100;
+  --tertiary-container: #a36700;
+  --tertiary-fixed: #ffddb8;
+  --tertiary-fixed-dim: #ffb95f;
+  --on-tertiary-fixed: #2a1700;
+  --error: #ba1a1a;
+  --on-error: #ffffff;
+  --error-container: #ffdad6;
+  --on-error-container: #93000a;
+}
+
+/* Dark palette: deep slate / charcoal with emerald accents */
+.dark {
+  color-scheme: dark;
+  --outline: #64748b;
+  --outline-variant: #334155;
+  --surface: #0b0f19;
+  --surface-dim: #070a12;
+  --surface-container-lowest: #111827;
+  --surface-container-low: #151d2e;
+  --surface-container: #1a2336;
+  --surface-container-high: #1f2937;
+  --surface-container-highest: #2a3649;
+  --on-surface: #f1f5f9;
+  --on-surface-variant: #94a3b8;
+  --inverse-surface: #f1f5f9;
+  --inverse-on-surface: #0b0f19;
+  --primary: #34d399;
+  --on-primary: #022c1c;
+  --primary-container: #059669;
+  --primary-fixed: #064e3b;
+  --primary-fixed-dim: #10b981;
+  --on-primary-fixed: #a7f3d0;
+  --secondary: #818cf8;
+  --on-secondary: #1e1b4b;
+  --secondary-container: #4f46e5;
+  --tertiary: #fbbf24;
+  --tertiary-container: #b45309;
+  --tertiary-fixed: #422006;
+  --tertiary-fixed-dim: #fbbf24;
+  --on-tertiary-fixed: #fde68a;
+  --error: #f87171;
+  --on-error: #450a0a;
+  --error-container: #450a0a;
+  --on-error-container: #fecaca;
+}
+
 @theme inline {
-  --color-outline: #6d7a72;
-  --color-outline-variant: #bccac0;
-  --color-surface: #f8f9ff;
-  --color-surface-dim: #cbdbf5;
-  --color-surface-container-lowest: #ffffff;
-  --color-surface-container-low: #eff4ff;
-  --color-surface-container: #e5eeff;
-  --color-surface-container-high: #dce9ff;
-  --color-surface-container-highest: #d3e4fe;
-  --color-on-surface: #0b1c30;
-  --color-on-surface-variant: #3d4a42;
-  --color-inverse-surface: #213145;
-  --color-inverse-on-surface: #eaf1ff;
-  --color-primary: #006948;
-  --color-on-primary: #ffffff;
-  --color-primary-container: #00855d;
-  --color-primary-fixed: #85f8c4;
-  --color-primary-fixed-dim: #68dba9;
-  --color-on-primary-fixed: #002114;
-  --color-secondary: #4648d4;
-  --color-on-secondary: #ffffff;
-  --color-secondary-container: #6063ee;
-  --color-tertiary: #825100;
-  --color-tertiary-container: #a36700;
-  --color-tertiary-fixed: #ffddb8;
-  --color-tertiary-fixed-dim: #ffb95f;
-  --color-on-tertiary-fixed: #2a1700;
-  --color-error: #ba1a1a;
-  --color-error-container: #ffdad6;
-  --color-on-error-container: #93000a;
+  --color-outline: var(--outline);
+  --color-outline-variant: var(--outline-variant);
+  --color-surface: var(--surface);
+  --color-surface-dim: var(--surface-dim);
+  --color-surface-container-lowest: var(--surface-container-lowest);
+  --color-surface-container-low: var(--surface-container-low);
+  --color-surface-container: var(--surface-container);
+  --color-surface-container-high: var(--surface-container-high);
+  --color-surface-container-highest: var(--surface-container-highest);
+  --color-on-surface: var(--on-surface);
+  --color-on-surface-variant: var(--on-surface-variant);
+  --color-inverse-surface: var(--inverse-surface);
+  --color-inverse-on-surface: var(--inverse-on-surface);
+  --color-primary: var(--primary);
+  --color-on-primary: var(--on-primary);
+  --color-primary-container: var(--primary-container);
+  --color-primary-fixed: var(--primary-fixed);
+  --color-primary-fixed-dim: var(--primary-fixed-dim);
+  --color-on-primary-fixed: var(--on-primary-fixed);
+  --color-secondary: var(--secondary);
+  --color-on-secondary: var(--on-secondary);
+  --color-secondary-container: var(--secondary-container);
+  --color-tertiary: var(--tertiary);
+  --color-tertiary-container: var(--tertiary-container);
+  --color-tertiary-fixed: var(--tertiary-fixed);
+  --color-tertiary-fixed-dim: var(--tertiary-fixed-dim);
+  --color-on-tertiary-fixed: var(--on-tertiary-fixed);
+  --color-error: var(--error);
+  --color-on-error: var(--on-error);
+  --color-error-container: var(--error-container);
+  --color-on-error-container: var(--on-error-container);
   --font-sans: var(--font-plex), system-ui, sans-serif;
 }
 
 body {
-  background: var(--color-surface);
-  color: var(--color-on-surface);
+  background: var(--surface);
+  color: var(--on-surface);
   font-family: var(--font-plex), system-ui, sans-serif;
   overscroll-behavior-y: none;
+}
+
+/* Smooth theme transition (kept on body only so Tailwind transition utilities stay intact) */
+body {
+  transition:
+    background-color 0.25s ease,
+    color 0.2s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body {
+    transition: none;
+  }
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--on-surface-variant);
+  opacity: 0.7;
 }
 
 .material-symbols-outlined {
