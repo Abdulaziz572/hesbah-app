@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { guessMealType, saveMealItems, type MealType } from "@/src/lib/meals";
+import { guessMealType, isMealType, saveMealItems, type MealType, type PreviousMeal } from "@/src/lib/meals";
 import type { MealDraft } from "@/src/lib/ai/types";
 import {
   calcMacros,
@@ -13,17 +13,33 @@ import MealTypePicker from "./MealTypePicker";
 import MealItemsEditor, { type MealEditorItem } from "./MealItemsEditor";
 
 interface Props {
-  draft: MealDraft;
-  initialRows: ReviewItem[];
+  /** AI analysis result. Omitted when editing a previous meal. */
+  draft?: MealDraft | null;
+  initialRows?: ReviewItem[];
+  /** A previous/saved meal to tweak before logging it (no AI involved). */
+  template?: PreviousMeal | null;
   targetDate?: Date;
   onBack: () => void;
 }
 
 const fmt = (n: number) => Math.round(n).toLocaleString("en-US");
 
-export default function ReviewScreen({ draft, initialRows, targetDate, onBack }: Props) {
+export default function ReviewScreen({ draft: draftProp, initialRows = [], template, targetDate, onBack }: Props) {
+  // With a template there is no AI draft; every AI-only field below is optional-chained or guarded.
+  const draft: MealDraft = draftProp ?? ({ items: [] } as unknown as MealDraft);
   const [items, setItems] = useState<MealEditorItem[]>(() =>
-    initialRows.map((r, i) => {
+    template
+      ? template.meal.items.map((it, i) => ({
+          id: `tpl-${i}-${it.id}`,
+          name: it.name,
+          grams: it.grams,
+          per100g: it.per100g,
+          calories: it.calories,
+          protein: it.protein,
+          carbs: it.carbs,
+          fat: it.fat,
+        }))
+      : initialRows.map((r, i) => {
       const macros = calcMacros(r.food, r.grams);
       const factor = (r.grams || 1) / 100;
       const p100 = r.food?.per100g ?? {
@@ -59,10 +75,16 @@ export default function ReviewScreen({ draft, initialRows, targetDate, onBack }:
     }),
   );
 
-  const [mealType, setMealType] = useState<MealType>(() => guessMealType());
-  const [title, setTitle] = useState(() => draft.dish_name?.ar || draft.dish_name?.en || "");
+  const [mealType, setMealType] = useState<MealType>(() =>
+    template && isMealType(template.meal.mealType) ? template.meal.mealType : guessMealType(),
+  );
+  const [title, setTitle] = useState(() =>
+    template ? (template.meal.title ?? "") : draft.dish_name?.ar || draft.dish_name?.en || "",
+  );
   const [confirmed, setConfirmed] = useState(true);
   const [saved, setSaved] = useState(false);
+  const [note, setNote] = useState(() => template?.customNote ?? "");
+  const [bookmark, setBookmark] = useState(() => !!template?.isSaved);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const router = useRouter();
@@ -81,9 +103,9 @@ export default function ReviewScreen({ draft, initialRows, targetDate, onBack }:
           carbs: it.carbs,
           fat: it.fat,
           food_id: it.originalFoodId,
-          quality: it.badge?.type === "verified" ? "db" : "ai_estimate",
+          quality: template ? "user_edit" : it.badge?.type === "verified" ? "db" : "ai_estimate",
         })),
-        { mealType, title, targetDate },
+        { mealType, title, targetDate, customNote: note, isSaved: bookmark },
       );
       setSaved(true);
       router.push("/");
@@ -128,7 +150,7 @@ export default function ReviewScreen({ draft, initialRows, targetDate, onBack }:
           <span>رجوع</span>
         </button>
         <h1 id="review-title" className="text-[20px] font-semibold text-on-surface">
-          مراجعة الوجبة
+          {template ? "تعديل قبل الإضافة" : "مراجعة الوجبة"}
         </h1>
         <span className="w-8" />
       </div>
@@ -150,10 +172,10 @@ export default function ReviewScreen({ draft, initialRows, targetDate, onBack }:
       <div className="bg-surface-container-lowest p-4 rounded-[20px] shadow-sm flex flex-col gap-1">
         <div className="flex items-center gap-1.5">
           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-primary-fixed text-on-primary-fixed">
-            <span className="material-symbols-outlined text-[13px]">auto_awesome</span>
-            <span>مسودة ذكية</span>
+            <span className="material-symbols-outlined text-[13px]">{template ? "history" : "auto_awesome"}</span>
+            <span>{template ? "من وجباتك السابقة" : "مسودة ذكية"}</span>
           </span>
-          <span className="text-[12px] text-on-surface-variant">رصد {items.length} مكونات</span>
+          <span className="text-[12px] text-on-surface-variant">{template ? "" : "رصد "}{items.length} مكونات</span>
         </div>
         <label htmlFor="meal-title" className="sr-only">عنوان الوجبة</label>
         <div className="flex items-center gap-2 rounded-xl bg-surface-container-low px-3 focus-within:ring-2 focus-within:ring-primary/40">
@@ -242,6 +264,53 @@ export default function ReviewScreen({ draft, initialRows, targetDate, onBack }:
         </div>
       )}
 
+      <div className="bg-surface-container-lowest p-4 rounded-2xl shadow-sm flex flex-col gap-3">
+        <div className="flex flex-col gap-1.5">
+          <label htmlFor="meal-note" className="text-[13px] font-bold text-on-surface">
+            وصف خاص للوجبة (اختياري)
+          </label>
+          <textarea
+            id="meal-note"
+            dir="rtl"
+            rows={2}
+            maxLength={500}
+            value={note}
+            disabled={saving}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="مثال: وجبتي بعد النادي بعد يوم الأرجل…"
+            className="w-full resize-none rounded-xl bg-surface-container-low p-3 text-[15px] leading-6 text-on-surface placeholder:text-outline outline-none focus:ring-2 focus:ring-primary/40 disabled:opacity-60"
+          />
+        </div>
+        <button
+          id="bookmark-meal-toggle"
+          type="button"
+          role="switch"
+          aria-checked={bookmark}
+          disabled={saving}
+          onClick={() => setBookmark((b) => !b)}
+          className="min-h-[44px] flex items-center justify-between gap-3 text-start focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary rounded-xl"
+        >
+          <span className="flex items-center gap-2 text-[13px] text-on-surface">
+            <span
+              className={`material-symbols-outlined text-[22px] ${bookmark ? "text-primary" : "text-outline"}`}
+              style={{ fontVariationSettings: `"FILL" ${bookmark ? 1 : 0}` }}
+              aria-hidden
+            >
+              bookmark
+            </span>
+            حفظ كقالب لإعادة إضافتها لاحقاً
+          </span>
+          <span
+            aria-hidden
+            className={`relative w-11 h-6 shrink-0 rounded-full transition-colors ${bookmark ? "bg-primary" : "bg-surface-container-highest"}`}
+          >
+            <span
+              className={`absolute top-0.5 start-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${bookmark ? "ltr:translate-x-5 rtl:-translate-x-5" : ""}`}
+            />
+          </span>
+        </button>
+      </div>
+
       <div className="bg-surface-container-lowest p-4 rounded-2xl shadow-sm flex flex-col gap-3.5 mt-1">
         <div className="flex items-center justify-between">
           <div>
@@ -250,7 +319,7 @@ export default function ReviewScreen({ draft, initialRows, targetDate, onBack }:
               {fmt(total.calories)} سعرة حرارية
             </span>
           </div>
-          {estimatedPct > 0 && (
+          {estimatedPct > 0 && !template && (
             <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[12px] font-medium bg-tertiary-fixed text-on-tertiary-fixed">
               <span>≈</span>
               <span>{estimatedPct}% تقديري</span>

@@ -6,6 +6,7 @@ import { buildReviewItems, type ReviewItem } from "@/src/lib/nutrition";
 import DescribeScreen from "./DescribeScreen";
 import ReviewScreen from "./ReviewScreen";
 import { localDateString, parseDateKey } from "@/src/lib/dates";
+import type { PreviousMeal } from "@/src/lib/meals";
 
 class PayloadTooLargeError extends Error {}
 
@@ -15,6 +16,8 @@ export default function MealFlow({ targetDateKey }: { targetDateKey?: string }) 
   const targetDate = parsed && localDateString(parsed) <= localDateString() ? parsed : undefined;
 
   const [draft, setDraft] = useState<MealDraft | null>(null);
+  // A previous meal opened for editing before it is logged (no AI call)
+  const [template, setTemplate] = useState<PreviousMeal | null>(null);
   const [rows, setRows] = useState<ReviewItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -66,10 +69,18 @@ export default function MealFlow({ targetDateKey }: { targetDateKey?: string }) 
         </div>
       </header>
       <main className="flex-1 px-4 pb-28 pt-2">
-        {draft ? (
+        {template ? (
+          <ReviewScreen key={template.signature} template={template} targetDate={targetDate} onBack={() => setTemplate(null)} />
+        ) : draft ? (
           <ReviewScreen key={draft.dish_name?.en + String(rows.length)} draft={draft} initialRows={rows} targetDate={targetDate} onBack={() => setDraft(null)} />
         ) : (
-          <DescribeScreen onAnalyze={analyze} loading={loading} error={error} />
+          <DescribeScreen
+            onAnalyze={analyze}
+            loading={loading}
+            error={error}
+            targetDate={targetDate}
+            onEditPrevious={setTemplate}
+          />
         )}
       </main>
     </div>

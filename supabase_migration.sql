@@ -57,3 +57,18 @@ drop trigger if exists user_profiles_set_updated_at on public.user_profiles;
 create trigger user_profiles_set_updated_at
   before update on public.user_profiles
   for each row execute function public.set_user_profiles_updated_at();
+
+-- ============================================================
+-- Task 3: Previous / Saved meals ("وجباتي السابقة")
+-- Adds a personal note and a bookmark flag to meals.
+-- Safe to re-run. The app works without it (localStorage fallback);
+-- running it syncs notes & bookmarks across devices.
+-- ============================================================
+
+alter table public.meals add column if not exists custom_note text;
+alter table public.meals add column if not exists is_saved boolean not null default false;
+
+-- Fast lookup of a user's bookmarked meals
+create index if not exists meals_user_saved_idx
+  on public.meals (user_id)
+  where is_saved;

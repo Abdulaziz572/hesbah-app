@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import type { MealInput, MediaPayload } from "@/src/lib/ai/types";
 import { compressImage, toDataUrl } from "@/src/lib/media";
 import {
@@ -8,6 +9,8 @@ import {
   RecorderError,
   useAudioRecorder,
 } from "@/src/lib/useAudioRecorder";
+import { MEAL_TYPES, copyMealToDate, fetchPreviousMeals, type PreviousMeal } from "@/src/lib/meals";
+import PreviousMealsSheet, { mealDisplayName } from "./PreviousMealsSheet";
 
 const EXAMPLE = "أكلت نص حبة دجاج شواية مع صحن رز بخاري صغير، وشربت بيبسي دايت";
 
@@ -15,7 +18,13 @@ interface Props {
   onAnalyze: (input: MealInput) => void | Promise<void>;
   loading: boolean;
   error: string | null;
+  /** Past day to log into (from the diary calendar); undefined means today. */
+  targetDate?: Date;
+  /** Open a previous meal in the review screen to adjust it before logging. */
+  onEditPrevious?: (meal: PreviousMeal) => void;
 }
+
+const TYPE_ICON = Object.fromEntries(MEAL_TYPES.map((t) => [t.value, t.icon]));
 
 const fmtTime = (secs: number) =>
   `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}`;
@@ -27,13 +36,57 @@ const RECORDER_ERRORS: Record<string, string> = {
   failed: "تعذّر بدء التسجيل. حاول مرة أخرى.",
 };
 
-export default function DescribeScreen({ onAnalyze, loading, error }: Props) {
+export default function DescribeScreen({ onAnalyze, loading, error, targetDate, onEditPrevious }: Props) {
+  const router = useRouter();
   const [text, setText] = useState("");
   const [image, setImage] = useState<MediaPayload | null>(null);
   const [audio, setAudio] = useState<{ payload: MediaPayload; secs: number } | null>(null);
   const [compressing, setCompressing] = useState(false);
   const [preparing, setPreparing] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
+
+  // Previous meals (no AI): quick strip + bottom sheet
+  const [previous, setPrevious] = useState<PreviousMeal[] | null>(null);
+  const [previousError, setPreviousError] = useState<string | null>(null);
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [sheetFocus, setSheetFocus] = useState<string | null>(null);
+  const [quickAddingSig, setQuickAddingSig] = useState<string | null>(null);
+
+  const loadPrevious = useCallback(async () => {
+    setPreviousError(null);
+    try {
+      setPrevious(await fetchPreviousMeals());
+    } catch (e) {
+      console.error(e);
+      setPreviousError("تعذّر تحميل وجباتك السابقة.");
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadPrevious();
+  }, [loadPrevious]);
+
+  async function quickAdd(p: PreviousMeal) {
+    setLocalError(null);
+    setQuickAddingSig(p.signature);
+    try {
+      await copyMealToDate(p.meal, targetDate);
+      router.push("/");
+    } catch (e) {
+      console.error(e);
+      setLocalError(e instanceof Error ? e.message : "تعذّر إضافة الوجبة. حاول مرة أخرى.");
+      setQuickAddingSig(null);
+    }
+  }
+
+  function openSheet(focus: string | null) {
+    setSheetFocus(focus);
+    setSheetOpen(true);
+  }
+
+  function updatePrevious(next: PreviousMeal) {
+    setPrevious((list) => (list ? list.map((m) => (m.signature === next.signature ? next : m)) : list));
+  }
 
   const { recording, elapsed, start, stop } = useAudioRecorder();
   const stopGuard = useRef(false);
@@ -285,7 +338,7 @@ export default function DescribeScreen({ onAnalyze, loading, error }: Props) {
           </div>
         ) : (
           <>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-2 gap-2">
               <button
                 id="mic-btn"
                 type="button"
@@ -315,6 +368,18 @@ export default function DescribeScreen({ onAnalyze, loading, error }: Props) {
               >
                 <span className="material-symbols-outlined text-[24px]">add_photo_alternate</span>
                 <span className="text-[12px] font-semibold">من المعرض</span>
+              </button>
+              <button
+                id="previous-meals-btn"
+                type="button"
+                onClick={() => openSheet(null)}
+                disabled={busy}
+                className="h-16 rounded-2xl bg-primary-fixed text-on-primary-fixed flex flex-col items-center justify-center gap-0.5 active:scale-95 transition-transform disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+              >
+                <span className="material-symbols-outlined text-[24px]" aria-hidden>
+                  history
+                </span>
+                <span className="text-[12px] font-semibold">وجباتي السابقة</span>
               </button>
             </div>
 
@@ -384,6 +449,97 @@ export default function DescribeScreen({ onAnalyze, loading, error }: Props) {
           </>
         )}
       </button>
+
+      {/* One-tap quick strip: recent / saved meals, no AI needed */}
+      {previous && previous.length > 0 && (
+        <section aria-labelledby="quick-meals-title" className="flex flex-col gap-2">
+          <div className="flex items-center justify-between px-1">
+            <h2 id="quick-meals-title" className="text-[14px] font-bold text-on-surface">
+              وجباتك الأخيرة
+            </h2>
+            <button
+              id="quick-meals-all-btn"
+              type="button"
+              onClick={() => openSheet(null)}
+              className="h-11 px-2 -me-2 text-[12px] font-semibold text-primary active:opacity-70 focus-visible:outline-2 focus-visible:outline-primary"
+            >
+              عرض الكل
+            </button>
+          </div>
+          <ul
+            className="flex gap-2 overflow-x-auto snap-x snap-mandatory -mx-4 px-4 pb-1 overscroll-x-contain"
+            aria-label="إضافة سريعة"
+          >
+            {previous.slice(0, 10).map((p) => {
+              const adding = quickAddingSig === p.signature;
+              return (
+                <li
+                  key={p.signature}
+                  className="snap-start shrink-0 w-[188px] flex items-center rounded-2xl bg-surface-container-lowest border border-outline-variant/20 shadow-sm"
+                >
+                  <button
+                    type="button"
+                    onClick={() => openSheet(p.signature)}
+                    disabled={!!quickAddingSig}
+                    aria-label={`تفاصيل ${mealDisplayName(p)}`}
+                    className="flex-1 min-w-0 min-h-[56px] ps-3 pe-1 py-2 text-start flex flex-col gap-0.5 rounded-s-2xl disabled:opacity-60 focus-visible:outline-2 focus-visible:outline-primary"
+                  >
+                    <span className="flex items-center gap-1 text-[13px] font-semibold text-on-surface min-w-0">
+                      {p.isSaved && (
+                        <span
+                          className="material-symbols-outlined text-[14px] text-primary shrink-0"
+                          style={{ fontVariationSettings: '"FILL" 1' }}
+                          aria-hidden
+                        >
+                          bookmark
+                        </span>
+                      )}
+                      <span className="truncate">{mealDisplayName(p)}</span>
+                    </span>
+                    <span className="flex items-center gap-1 text-[11px] text-on-surface-variant tabular-nums">
+                      <span className="material-symbols-outlined text-[13px]" aria-hidden>
+                        {TYPE_ICON[p.meal.mealType ?? ""] ?? "restaurant"}
+                      </span>
+                      {Math.round(p.meal.totals.calories).toLocaleString("en-US")} سعرة
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void quickAdd(p)}
+                    disabled={!!quickAddingSig}
+                    aria-label={`إضافة ${mealDisplayName(p)} الآن`}
+                    className="w-11 h-11 me-1 shrink-0 rounded-full bg-primary text-on-primary flex items-center justify-center active:scale-90 transition-transform disabled:opacity-60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+                  >
+                    {adding ? (
+                      <span
+                        className="w-4 h-4 rounded-full border-2 border-on-primary/40 border-t-on-primary animate-spin"
+                        aria-hidden
+                      />
+                    ) : (
+                      <span className="material-symbols-outlined text-[22px]" aria-hidden>
+                        add
+                      </span>
+                    )}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      )}
+
+      {sheetOpen && (
+        <PreviousMealsSheet
+          meals={previous}
+          loadError={previousError}
+          initialOpen={sheetFocus}
+          targetDate={targetDate}
+          onClose={() => setSheetOpen(false)}
+          onRetry={() => void loadPrevious()}
+          onUpdate={updatePrevious}
+          onEdit={onEditPrevious}
+        />
+      )}
     </section>
   );
 }

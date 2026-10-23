@@ -49,6 +49,114 @@ export interface SaveMealOptions {
    * calendar. The time-of-day is the current time so ordering within the day stays sensible.
    */
   targetDate?: Date;
+  /** Personal context for the meal (e.g. "post-gym meal"). */
+  customNote?: string | null;
+  /** Bookmark the meal as a reusable template. */
+  isSaved?: boolean;
+}
+
+// ---------- Custom note / saved flag: DB columns with localStorage fallback ----------
+
+/** null = unknown yet, false = columns missing in the DB (run supabase_migration.sql). */
+let extrasSupported: boolean | null = null;
+
+interface LocalExtra {
+  note?: string;
+  saved?: boolean;
+}
+
+const extrasKey = (uid: string) => `hesbah:meal-extras:v1:${uid}`;
+
+function readLocalExtras(uid: string): Record<string, LocalExtra> {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(extrasKey(uid));
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeLocalExtras(uid: string, map: Record<string, LocalExtra>) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(extrasKey(uid), JSON.stringify(map));
+  } catch {
+    /* storage full / blocked: the feature degrades to DB-only */
+  }
+}
+
+/** True when a Supabase error means custom_note / is_saved do not exist yet. */
+function isMissingExtrasColumn(err: unknown): boolean {
+  if (!err) return false;
+  const e = err as { code?: string; message?: string; details?: string };
+  const str = `${e.code ?? ""} ${e.message ?? ""} ${e.details ?? ""}`.toLowerCase();
+  return (
+    e.code === "42703" ||
+    e.code === "PGRST204" ||
+    e.code === "PGRST200" ||
+    str.includes("custom_note") ||
+    str.includes("is_saved") ||
+    str.includes("42703")
+  );
+}
+
+/** Identity of a meal "template": same title and same foods/grams are the same meal. */
+export function mealSignature(
+  title: string | null | undefined,
+  items: { name: string; grams: number }[],
+): string {
+  const parts = items.map((it) => `${it.name.trim()}:${Math.round(Number(it.grams) || 0)}`).sort();
+  return `${(title ?? "").trim()}|${parts.join(",")}`;
+}
+
+const cleanNote = (n?: string | null) => {
+  const v = (n ?? "").trim().slice(0, 500);
+  return v || null;
+};
+
+export interface MealExtrasSource {
+  /** Row to update in the DB (the representative meal). Optional for local-only writes. */
+  id?: string;
+  title?: string | null;
+  items: { name: string; grams: number }[];
+}
+
+/**
+ * Save the personal note and/or bookmark flag of a meal. Always written locally (so it works
+ * before the SQL migration); also written to the DB when the columns exist.
+ */
+export async function setMealExtras(
+  source: MealExtrasSource,
+  patch: { note?: string | null; saved?: boolean },
+): Promise<void> {
+  const user = await requireUser();
+  const sig = mealSignature(source.title, source.items);
+  const map = readLocalExtras(user.id);
+  const cur: LocalExtra = { ...map[sig] };
+  if (patch.note !== undefined) cur.note = cleanNote(patch.note) ?? undefined;
+  if (patch.saved !== undefined) cur.saved = patch.saved || undefined;
+  if (!cur.note && !cur.saved) delete map[sig];
+  else map[sig] = cur;
+  writeLocalExtras(user.id, map);
+
+  if (source.id && UUID_RE.test(source.id) && extrasSupported !== false) {
+    const dbPatch: Record<string, unknown> = {};
+    if (patch.note !== undefined) dbPatch.custom_note = cleanNote(patch.note);
+    if (patch.saved !== undefined) dbPatch.is_saved = patch.saved;
+    const { error } = await supabase
+      .from("meals")
+      .update(dbPatch)
+      .eq("id", source.id)
+      .eq("user_id", user.id);
+    if (error) {
+      if (isMissingExtrasColumn(error)) extrasSupported = false;
+      else console.warn("[meals] extras DB update failed; kept locally", error);
+    } else {
+      extrasSupported = true;
+    }
+  }
 }
 
 /** The moment a meal is stamped with: now for today, otherwise target day at the current clock time. */
@@ -92,21 +200,53 @@ export async function saveMealItems(
   }));
   const totals = sumMacros(macros);
 
-  const { data: meal, error } = await supabase
-    .from("meals")
-    .insert({
-      user_id: user.id,
-      eaten_at: eatenAt.toISOString(),
-      local_date: localDateString(eatenAt),
-      meal_type: options.mealType && isMealType(options.mealType) ? options.mealType : guessMealType(now),
-      meal_title_ar: cleanTitle(options.title),
-      origin: "ai_text",
-      totals,
-      estimated_kcal: Math.round(totals.calories),
-    })
-    .select("id")
-    .single();
+  const baseRow = {
+    user_id: user.id,
+    eaten_at: eatenAt.toISOString(),
+    local_date: localDateString(eatenAt),
+    meal_type: options.mealType && isMealType(options.mealType) ? options.mealType : guessMealType(now),
+    meal_title_ar: cleanTitle(options.title),
+    origin: "ai_text",
+    totals,
+    estimated_kcal: Math.round(totals.calories),
+  };
+  const note = cleanNote(options.customNote);
+  const wantsExtras = !!note || !!options.isSaved;
+
+  let inserted = null as { id: string } | null;
+  let insertErr: unknown = null;
+  if (wantsExtras && extrasSupported !== false) {
+    const r = await supabase
+      .from("meals")
+      .insert({ ...baseRow, custom_note: note, is_saved: !!options.isSaved })
+      .select("id")
+      .single();
+    if (r.error && isMissingExtrasColumn(r.error)) extrasSupported = false;
+    else {
+      inserted = r.data;
+      insertErr = r.error;
+      if (!r.error) extrasSupported = true;
+    }
+  }
+  if (!inserted && !insertErr) {
+    const r = await supabase.from("meals").insert(baseRow).select("id").single();
+    inserted = r.data;
+    insertErr = r.error;
+  }
+  const meal = inserted;
+  const error = insertErr;
   if (error || !meal) throw error ?? new Error("Failed to save meal");
+
+  if (wantsExtras) {
+    // Local copy keeps the note/bookmark alive before the migration is applied.
+    const sig = mealSignature(baseRow.meal_title_ar, itemsToSave);
+    const map = readLocalExtras(user.id);
+    const cur: LocalExtra = { ...map[sig] };
+    if (note) cur.note = note;
+    if (options.isSaved) cur.saved = true;
+    map[sig] = cur;
+    writeLocalExtras(user.id, map);
+  }
 
   const items = itemsToSave.map((it) => ({
     meal_id: meal.id,
@@ -175,6 +315,10 @@ export interface DiaryMeal {
   title: string | null;
   totals: Macros;
   items: DiaryItem[];
+  /** Personal context written by the user (custom_note). */
+  customNote?: string | null;
+  /** Bookmarked as a reusable template (is_saved). */
+  isSaved?: boolean;
 }
 
 interface MealRow {
@@ -184,6 +328,8 @@ interface MealRow {
   meal_type: string | null;
   meal_title_ar: string | null;
   totals: Partial<Macros> | null;
+  custom_note?: string | null;
+  is_saved?: boolean | null;
   meal_items: {
     id: string;
     grams: number | string;
@@ -212,16 +358,29 @@ async function queryMeals(startDate: Date, endDate: Date): Promise<DiaryMeal[]> 
     return [];
   }
 
-  const { data, error } = await supabase
-    .from("meals")
-    .select(
-      "id, eaten_at, local_date, meal_type, meal_title_ar, totals, meal_items(id, grams, per_100g_snapshot, nutrients, foods(name_ar, name_en))",
-    )
-    .eq("user_id", user.id)
-    .gte("local_date", localDateString(startOfDay(startDate)))
-    .lte("local_date", localDateString(endOfDay(endDate)))
-    .order("eaten_at", { ascending: true });
+  const baseCols =
+    "id, eaten_at, local_date, meal_type, meal_title_ar, totals, meal_items(id, grams, per_100g_snapshot, nutrients, foods(name_ar, name_en))";
+  const run = (cols: string) =>
+    supabase
+      .from("meals")
+      .select(cols)
+      .eq("user_id", user.id)
+      .gte("local_date", localDateString(startOfDay(startDate)))
+      .lte("local_date", localDateString(endOfDay(endDate)))
+      .order("eaten_at", { ascending: true });
+
+  let res =
+    extrasSupported === false ? await run(baseCols) : await run(`${baseCols}, custom_note, is_saved`);
+  if (res.error && extrasSupported !== false && isMissingExtrasColumn(res.error)) {
+    extrasSupported = false;
+    res = await run(baseCols);
+  } else if (!res.error && extrasSupported === null) {
+    extrasSupported = true;
+  }
+  const { data, error } = res;
   if (error) throw error;
+
+  const localExtras = readLocalExtras(user.id);
 
   return ((data ?? []) as unknown as MealRow[]).map((m) => {
     const items = (m.meal_items ?? []).map((it) => {
@@ -266,6 +425,7 @@ async function queryMeals(startDate: Date, endDate: Date): Promise<DiaryMeal[]> 
         },
       };
     });
+    const local = localExtras[mealSignature(m.meal_title_ar, items)];
     return {
       id: m.id,
       localDate: m.local_date,
@@ -279,8 +439,90 @@ async function queryMeals(startDate: Date, endDate: Date): Promise<DiaryMeal[]> 
         fat: num(m.totals?.fat),
       },
       items,
+      customNote: cleanNote(m.custom_note) ?? local?.note ?? null,
+      isSaved: !!m.is_saved || !!local?.saved,
     };
   });
+}
+
+/** A deduplicated meal template built from the user's history. */
+export interface PreviousMeal {
+  signature: string;
+  /** Most recent occurrence; its items/totals are what gets copied. */
+  meal: DiaryMeal;
+  /** How many times the user logged this exact meal. */
+  count: number;
+  isSaved: boolean;
+  customNote: string | null;
+}
+
+/**
+ * Previous meals without any AI call: the last ~6 months of history, deduplicated by
+ * title + foods + grams. Bookmarked meals come first, then the most recent.
+ */
+export async function fetchPreviousMeals(days = 180, limit = 60): Promise<PreviousMeal[]> {
+  const end = new Date();
+  const start = addDaysLocal(end, -days);
+  const all = await queryMeals(start, end);
+  const groups = new Map<string, PreviousMeal>();
+  for (const m of all) {
+    if (m.items.length === 0) continue;
+    const sig = mealSignature(m.title, m.items);
+    const g = groups.get(sig);
+    if (!g) {
+      groups.set(sig, {
+        signature: sig,
+        meal: m,
+        count: 1,
+        isSaved: !!m.isSaved,
+        customNote: m.customNote ?? null,
+      });
+    } else {
+      g.count += 1;
+      g.isSaved = g.isSaved || !!m.isSaved;
+      if (m.eatenAt > g.meal.eatenAt) {
+        g.meal = m;
+        g.customNote = m.customNote ?? null;
+      }
+    }
+  }
+  return [...groups.values()]
+    .sort(
+      (a, b) =>
+        Number(b.isSaved) - Number(a.isSaved) || (a.meal.eatenAt < b.meal.eatenAt ? 1 : -1),
+    )
+    .slice(0, limit);
+}
+
+function addDaysLocal(d: Date, n: number): Date {
+  const r = new Date(d);
+  r.setDate(r.getDate() + n);
+  return r;
+}
+
+/**
+ * Log a copy of an existing meal (default: today) without calling the AI. The copy keeps the
+ * foods, grams, title, type and personal note.
+ */
+export async function copyMealToDate(meal: DiaryMeal, targetDate: Date = new Date()): Promise<void> {
+  await saveMealItems(
+    meal.items.map((it) => ({
+      name: it.name,
+      grams: it.grams,
+      per100g: it.per100g,
+      calories: it.calories,
+      protein: it.protein,
+      carbs: it.carbs,
+      fat: it.fat,
+      quality: "user_edit",
+    })),
+    {
+      mealType: isMealType(meal.mealType) ? meal.mealType : undefined,
+      title: meal.title ?? undefined,
+      targetDate,
+      customNote: meal.customNote,
+    },
+  );
 }
 
 /** All meals of one local day (defaults to today). Accepts a Date or a YYYY-MM-DD key. */
@@ -373,6 +615,10 @@ export interface UpdateMealData {
   items?: UpdateMealItemInput[];
   /** Optional manual override for total calories/macros. */
   totals?: Macros;
+  /** Personal note (custom_note); empty string clears it. */
+  customNote?: string;
+  /** Bookmark flag (is_saved). */
+  isSaved?: boolean;
 }
 
 interface StoredItem {
@@ -520,4 +766,35 @@ export async function updateMeal(mealId: string, updatedData: UpdateMealData): P
     .select("id");
   if (updErr) throw updErr;
   if (!updated?.length) throw new Error("تعذّر تحديث الوجبة");
+
+  // Note / bookmark go through setMealExtras so they also survive a missing migration.
+  if (updatedData.customNote !== undefined || updatedData.isSaved !== undefined) {
+    const { data: fresh } = await supabase
+      .from("meals")
+      .select("meal_title_ar, meal_items(grams, nutrients, foods(name_ar, name_en))")
+      .eq("id", mealId)
+      .single();
+    const row = fresh as unknown as {
+      meal_title_ar: string | null;
+      meal_items: {
+        grams: number | string;
+        nutrients: { name_ar?: string; name_en?: string } | null;
+        foods: { name_ar?: string; name_en?: string } | null;
+      }[];
+    } | null;
+    if (row) {
+      await setMealExtras(
+        {
+          id: mealId,
+          title: row.meal_title_ar,
+          items: (row.meal_items ?? []).map((it) => ({
+            name:
+              it.nutrients?.name_ar || it.foods?.name_ar || it.nutrients?.name_en || it.foods?.name_en || "عنصر",
+            grams: num(it.grams),
+          })),
+        },
+        { note: updatedData.customNote, saved: updatedData.isSaved },
+      );
+    }
+  }
 }

@@ -4,7 +4,6 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   MEAL_TYPES,
-  deleteMeal,
   fetchDaySummaries,
   fetchMealsForDay,
   type DaySummary,
@@ -113,9 +112,7 @@ export default function Diary() {
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [editing, setEditing] = useState<DiaryMeal | null>(null);
-  const [confirmingId, setConfirmingId] = useState<string | null>(null);
-  const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   // Daily targets: seeded from the local cache for an instant first paint, then refreshed.
   const userId = user?.id ?? "";
@@ -234,25 +231,15 @@ export default function Diary() {
     };
   }, [selectedDate]);
 
-  async function handleDelete(id: string) {
-    setDeletingId(id);
-    setActionError(null);
-    try {
-      await deleteMeal(id);
-      // Drop it locally so the calorie ring and macro totals recompute immediately
-      setMeals((prev) => (prev ? prev.filter((m) => m.id !== id) : prev));
-      setConfirmingId(null);
-      // Refresh summaries for calendar dots & weekly chart
-      void loadSummaries(selectedDate);
-    } catch (e: unknown) {
-      console.error(e);
-      setActionError(e instanceof Error ? e.message : "تعذّر حذف الوجبة. حاول مرة أخرى.");
-    } finally {
-      setDeletingId(null);
-    }
-  }
-
   const totals = useMemo(() => sumMacros((meals ?? []).map((m) => m.totals)), [meals]);
+
+  /** Show today's diary after a meal was copied into it, with a short confirmation. */
+  async function showTodayAfterCopy() {
+    setNotice("تمت إضافة الوجبة إلى اليوم الحالي");
+    window.setTimeout(() => setNotice(null), 3500);
+    if (isSelectedToday) await loadData(today);
+    else setSelectedDate(new Date());
+  }
 
   const dateLabel = isSelectedToday
     ? "اليوم"
@@ -409,20 +396,15 @@ export default function Diary() {
             </div>
           )}
 
-          {actionError && (
+          {notice && (
             <div
-              role="alert"
-              className="p-3.5 rounded-xl bg-error-container text-on-error-container text-[13px] flex items-center justify-between"
+              role="status"
+              className="p-3.5 rounded-xl bg-primary-fixed text-on-primary-fixed text-[13px] font-semibold flex items-center gap-2"
             >
-              <span>{actionError}</span>
-              <button
-                type="button"
-                onClick={() => setActionError(null)}
-                aria-label="إخفاء"
-                className="material-symbols-outlined text-[18px] ps-2"
-              >
-                close
-              </button>
+              <span className="material-symbols-outlined text-[18px]" aria-hidden>
+                check_circle
+              </span>
+              <span>{notice}</span>
             </div>
           )}
 
@@ -464,8 +446,6 @@ export default function Diary() {
                 const time = new Intl.DateTimeFormat("ar-SA", { hour: "numeric", minute: "2-digit" }).format(
                   new Date(m.eatenAt),
                 );
-                const confirming = confirmingId === m.id;
-                const deleting = deletingId === m.id;
                 return (
                   <li key={m.id} className="relative">
                     <span className="absolute -start-6 top-5 w-4 h-4 rounded-full bg-primary border-4 border-surface" />
@@ -475,7 +455,7 @@ export default function Diary() {
                         if (target.closest("button") || target.closest("a")) return;
                         setEditing(m);
                       }}
-                      className={`bg-surface-container-lowest rounded-2xl p-4 shadow-sm border border-outline-variant/20 flex flex-col gap-2.5 transition-all cursor-pointer hover:border-primary/40 hover:shadow-md active:scale-[0.99] ${deleting ? "opacity-50 pointer-events-none" : ""}`}
+                      className="bg-surface-container-lowest rounded-2xl p-4 shadow-sm border border-outline-variant/20 flex flex-col gap-2.5 transition-all cursor-pointer hover:border-primary/40 hover:shadow-md active:scale-[0.99]"
                     >
                       <div className="flex items-start justify-between gap-2">
                         <div className="flex flex-col gap-1 min-w-0">
@@ -490,7 +470,25 @@ export default function Diary() {
                             <span className="text-[15px] font-bold text-on-surface truncate">{m.title}</span>
                           )}
                         </div>
-                        <span className="text-[15px] font-bold text-on-surface shrink-0">{fmt(m.totals.calories)} سعرة</span>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <span className="text-[15px] font-bold text-on-surface tabular-nums">
+                            {fmt(m.totals.calories)} سعرة
+                          </span>
+                          <button
+                            id={`edit-meal-${m.id}`}
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setEditing(m);
+                            }}
+                            aria-label={`تعديل أو خيارات ${m.title || meta.label}`}
+                            className="w-11 h-11 -me-2 rounded-full text-on-surface-variant hover:text-primary hover:bg-surface-container-low flex items-center justify-center active:scale-90 transition-all focus-visible:outline-2 focus-visible:outline-primary"
+                          >
+                            <span className="material-symbols-outlined text-[20px]" aria-hidden>
+                              more_vert
+                            </span>
+                          </button>
+                        </div>
                       </div>
                       <ul className="flex flex-col gap-1">
                         {m.items.map((it) => (
@@ -506,58 +504,6 @@ export default function Diary() {
                         بروتين {fmt(m.totals.protein)}g • كربوهيدرات {fmt(m.totals.carbs)}g • دهون{" "}
                         {fmt(m.totals.fat)}g
                       </div>
-
-                      {confirming ? (
-                        <div className="flex items-center gap-2 pt-1">
-                          <span className="flex-1 text-[13px] font-semibold text-on-error-container">
-                            حذف هذه الوجبة نهائياً؟
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => setConfirmingId(null)}
-                            disabled={deleting}
-                            className="h-9 px-3 rounded-xl bg-surface-container-low text-on-surface-variant text-[13px] font-semibold active:scale-95 transition-transform disabled:opacity-50"
-                          >
-                            تراجع
-                          </button>
-                          <button
-                            id={`confirm-delete-${m.id}`}
-                            type="button"
-                            onClick={() => handleDelete(m.id)}
-                            disabled={deleting}
-                            className="h-9 px-3 rounded-xl bg-error text-on-error text-[13px] font-bold flex items-center gap-1.5 active:scale-95 transition-transform disabled:opacity-60"
-                          >
-                            {deleting && (
-                              <span className="w-3.5 h-3.5 rounded-full border-2 border-white/40 border-t-white animate-spin" aria-hidden />
-                            )}
-                            <span>{deleting ? "جارٍ الحذف..." : "نعم، احذف"}</span>
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="flex items-center gap-2 pt-1">
-                          <button
-                            id={`edit-meal-${m.id}`}
-                            type="button"
-                            onClick={() => setEditing(m)}
-                            className="flex-1 h-9 rounded-xl bg-surface-container-low text-primary text-[13px] font-semibold flex items-center justify-center gap-1.5 active:scale-95 transition-transform"
-                          >
-                            <span className="material-symbols-outlined text-[18px]">edit</span>
-                            <span>تعديل</span>
-                          </button>
-                          <button
-                            id={`delete-meal-${m.id}`}
-                            type="button"
-                            onClick={() => {
-                              setActionError(null);
-                              setConfirmingId(m.id);
-                            }}
-                            className="flex-1 h-9 rounded-xl bg-surface-container-low text-error text-[13px] font-semibold flex items-center justify-center gap-1.5 active:scale-95 transition-transform"
-                          >
-                            <span className="material-symbols-outlined text-[18px]">delete</span>
-                            <span>حذف</span>
-                          </button>
-                        </div>
-                      )}
                     </article>
                   </li>
                 );
@@ -571,10 +517,15 @@ export default function Diary() {
         <EditMealSheet
           key={editing.id}
           meal={editing}
+          isPastDate={!isSelectedToday}
           onClose={() => setEditing(null)}
           onSaved={async () => {
             await loadData(selectedDate);
             setEditing(null);
+          }}
+          onCopied={async () => {
+            setEditing(null);
+            await showTodayAfterCopy();
           }}
         />
       )}

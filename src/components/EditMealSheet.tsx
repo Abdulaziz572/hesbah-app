@@ -2,8 +2,10 @@
 
 import { useEffect, useMemo, useState } from "react";
 import {
+  copyMealToDate,
   deleteMeal,
   isMealType,
+  localDateString,
   updateMeal,
   type DiaryMeal,
   type MealType,
@@ -14,9 +16,13 @@ import MealItemsEditor, { type MealEditorItem } from "./MealItemsEditor";
 
 interface Props {
   meal: DiaryMeal;
+  /** Whether the meal is from a past date. If omitted, checks meal.localDate vs today. */
+  isPastDate?: boolean;
   onClose: () => void;
   /** Called after a successful save or delete; the sheet stays in its saving state until resolved. */
   onSaved: () => void | Promise<void>;
+  /** Called after the meal was copied to today's diary (sheet should close and show today). */
+  onCopied?: () => void | Promise<void>;
 }
 
 const fmt = (n: number) => Math.round(n).toLocaleString("en-US");
@@ -25,8 +31,13 @@ const fmtDec = (n: number) => (Math.round(n * 10) / 10).toLocaleString("en-US");
 const focusRing =
   "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary";
 
-export default function EditMealSheet({ meal, onClose, onSaved }: Props) {
+export default function EditMealSheet({ meal, isPastDate, onClose, onSaved, onCopied }: Props) {
   const [title, setTitle] = useState(meal.title ?? "");
+  const [note, setNote] = useState(meal.customNote ?? "");
+  const [bookmarked, setBookmarked] = useState(!!meal.isSaved);
+  const [copying, setCopying] = useState(false);
+
+  const showCopy = isPastDate !== undefined ? isPastDate : meal.localDate !== localDateString();
   const [mealType, setMealType] = useState<MealType>(
     isMealType(meal.mealType) ? meal.mealType : "snack",
   );
@@ -73,7 +84,7 @@ export default function EditMealSheet({ meal, onClose, onSaved }: Props) {
   // Escape closes sheet when not saving/deleting
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !saving && !deleting) onClose();
+      if (e.key === "Escape" && !saving && !deleting && !copying) onClose();
     };
     document.addEventListener("keydown", onKey);
     const prev = document.body.style.overflow;
@@ -82,7 +93,7 @@ export default function EditMealSheet({ meal, onClose, onSaved }: Props) {
       document.removeEventListener("keydown", onKey);
       document.body.style.overflow = prev;
     };
-  }, [saving, deleting, onClose]);
+  }, [saving, deleting, copying, onClose]);
 
   // Derived sum of items
   const itemsTotal = useMemo(
@@ -136,6 +147,8 @@ export default function EditMealSheet({ meal, onClose, onSaved }: Props) {
           fat: it.fat,
         })),
         totals: isManualTotal ? manualTotals : undefined,
+        customNote: note.trim() !== (meal.customNote ?? "") ? note.trim() : undefined,
+        isSaved: bookmarked !== !!meal.isSaved ? bookmarked : undefined,
       });
       await onSaved();
     } catch (e: unknown) {
@@ -160,7 +173,21 @@ export default function EditMealSheet({ meal, onClose, onSaved }: Props) {
     }
   }
 
-  const isBusy = saving || deleting;
+  // Copy this meal (any past day) into today's diary without calling the AI
+  async function handleCopyToToday() {
+    setCopying(true);
+    setError(null);
+    try {
+      await copyMealToDate({ ...meal, customNote: note.trim() || null });
+      await (onCopied ?? onSaved)();
+    } catch (e: unknown) {
+      console.error(e);
+      setError(e instanceof Error ? e.message : "تعذّر نسخ الوجبة. حاول مرة أخرى.");
+      setCopying(false);
+    }
+  }
+
+  const isBusy = saving || deleting || copying;
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center" role="presentation">
@@ -231,6 +258,54 @@ export default function EditMealSheet({ meal, onClose, onSaved }: Props) {
               className={`h-11 rounded-xl bg-surface-container-low px-3 text-[15px] text-on-surface placeholder:text-outline border border-transparent outline-none focus:border-primary/40 focus:ring-2 focus:ring-primary/30 disabled:opacity-60 transition-all ${focusRing}`}
             />
           </div>
+        </div>
+
+        {/* Personal note + bookmark */}
+        <div className="bg-surface-container-lowest p-4 rounded-[20px] shadow-sm border border-outline-variant/20 flex flex-col gap-3">
+          <div className="flex flex-col gap-1.5">
+            <label htmlFor="edit-meal-note" className="text-[13px] font-bold text-on-surface">
+              وصف خاص للوجبة (اختياري)
+            </label>
+            <textarea
+              id="edit-meal-note"
+              dir="rtl"
+              rows={2}
+              maxLength={500}
+              value={note}
+              disabled={isBusy}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="مثال: غداء الدوام المعتاد…"
+              className={`w-full resize-none rounded-xl bg-surface-container-low p-3 text-[15px] leading-6 text-on-surface placeholder:text-outline border border-transparent outline-none focus:border-primary/40 focus:ring-2 focus:ring-primary/30 disabled:opacity-60 ${focusRing}`}
+            />
+          </div>
+          <button
+            id="edit-bookmark-toggle"
+            type="button"
+            role="switch"
+            aria-checked={bookmarked}
+            disabled={isBusy}
+            onClick={() => setBookmarked((b) => !b)}
+            className={`min-h-[44px] flex items-center justify-between gap-3 text-start rounded-xl ${focusRing}`}
+          >
+            <span className="flex items-center gap-2 text-[13px] text-on-surface">
+              <span
+                className={`material-symbols-outlined text-[22px] ${bookmarked ? "text-primary" : "text-outline"}`}
+                style={{ fontVariationSettings: `"FILL" ${bookmarked ? 1 : 0}` }}
+                aria-hidden
+              >
+                bookmark
+              </span>
+              حفظ كقالب في «وجباتي السابقة»
+            </span>
+            <span
+              aria-hidden
+              className={`relative w-11 h-6 shrink-0 rounded-full transition-colors ${bookmarked ? "bg-primary" : "bg-surface-container-highest"}`}
+            >
+              <span
+                className={`absolute top-0.5 start-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${bookmarked ? "ltr:translate-x-5 rtl:-translate-x-5" : ""}`}
+              />
+            </span>
+          </button>
         </div>
 
         {/* Meal Items Section with Reusable MealItemsEditor */}
@@ -470,6 +545,34 @@ export default function EditMealSheet({ meal, onClose, onSaved }: Props) {
                   </>
                 )}
               </button>
+
+              {/* Copy to today's diary (no AI) - only shown for past days */}
+              {showCopy && (
+                <button
+                  id="copy-to-today-btn"
+                  type="button"
+                  onClick={handleCopyToToday}
+                  disabled={isBusy || items.length === 0}
+                  className={`w-full h-12 rounded-xl bg-primary-fixed text-on-primary-fixed font-semibold text-[15px] flex items-center justify-center gap-2 active:scale-[0.98] transition-all disabled:opacity-50 ${focusRing}`}
+                >
+                  {copying ? (
+                    <>
+                      <span
+                        className="w-5 h-5 rounded-full border-2 border-on-primary-fixed/30 border-t-on-primary-fixed animate-spin"
+                        aria-hidden
+                      />
+                      <span>جارٍ النسخ...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="material-symbols-outlined text-[20px]" aria-hidden>
+                        content_copy
+                      </span>
+                      <span>نسخ وإضافة لليوم الحالي</span>
+                    </>
+                  )}
+                </button>
+              )}
 
               {/* Delete meal button */}
               <button

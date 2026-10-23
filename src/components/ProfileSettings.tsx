@@ -409,6 +409,65 @@ export default function ProfileSettings() {
   const [signingOut, setSigningOut] = useState(false);
   const [toast, setToast] = useState<{ id: number; synced: boolean } | null>(null);
 
+  const [subView, setSubView] = useState<"menu" | "calculator">("menu");
+
+  const openCalculator = useCallback(() => {
+    setSubView("calculator");
+    if (typeof window !== "undefined") {
+      try {
+        const url = new URL(window.location.href);
+        url.searchParams.set("view", "calculator");
+        window.history.pushState({ subView: "calculator" }, "", url.toString());
+      } catch {}
+    }
+  }, []);
+
+  const closeCalculator = useCallback(() => {
+    setSubView("menu");
+    if (typeof window !== "undefined") {
+      try {
+        const url = new URL(window.location.href);
+        if (url.searchParams.get("view") === "calculator") {
+          url.searchParams.delete("view");
+          window.history.replaceState({ subView: "menu" }, "", url.toString());
+        }
+      } catch {}
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const sp = new URLSearchParams(window.location.search);
+      if (sp.get("view") === "calculator") {
+        setSubView("calculator");
+      }
+    }
+
+    const onPopState = () => {
+      const sp = new URLSearchParams(window.location.search);
+      if (sp.get("view") === "calculator") {
+        setSubView("calculator");
+      } else {
+        setSubView("menu");
+      }
+    };
+
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
+  // Allow Escape key to return to settings menu
+  useEffect(() => {
+    if (subView !== "calculator") return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        closeCalculator();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [subView, closeCalculator]);
+
   // Fetch the authoritative profile (Supabase → localStorage fallback).
   useEffect(() => {
     if (!userId) return;
@@ -525,11 +584,31 @@ export default function ProfileSettings() {
 
   return (
     <div className="max-w-md w-full mx-auto min-h-screen flex flex-col pb-28">
-      <header className="h-16 px-4 flex items-center sticky top-0 z-10 bg-surface/85 backdrop-blur-xl border-b border-outline-variant/20">
-        <div className="flex flex-col">
-          <h1 className="text-[18px] font-bold text-on-surface leading-tight">حسابي</h1>
-          <span className="text-[12px] text-on-surface-variant">بياناتك وأهدافك وإعدادات التطبيق</span>
-        </div>
+      <header className="h-16 px-4 flex items-center justify-between sticky top-0 z-10 bg-surface/85 backdrop-blur-xl border-b border-outline-variant/20">
+        {subView === "menu" ? (
+          <div className="flex flex-col">
+            <h1 className="text-[18px] font-bold text-on-surface leading-tight">حسابي</h1>
+            <span className="text-[12px] text-on-surface-variant">بياناتك وأهدافك وإعدادات التطبيق</span>
+          </div>
+        ) : (
+          <>
+            <button
+              id="profile-back-to-menu"
+              type="button"
+              onClick={closeCalculator}
+              className={`inline-flex items-center gap-1.5 h-10 px-3.5 rounded-xl bg-surface-container-high text-on-surface hover:bg-surface-container-highest active:scale-95 transition-all text-[13px] font-semibold ${focusRing}`}
+            >
+              <span aria-hidden="true" className="material-symbols-outlined text-[18px] rtl:rotate-180">
+                arrow_back
+              </span>
+              <span>رجوع للإعدادات</span>
+            </button>
+            <div className="flex flex-col text-end">
+              <h1 className="text-[16px] font-bold text-on-surface leading-tight">حساب السعرات والأهداف</h1>
+              <span className="text-[11px] text-on-surface-variant">معادلة ميفلين-سانت جور</span>
+            </div>
+          </>
+        )}
       </header>
 
       {/* Save confirmation */}
@@ -564,8 +643,127 @@ export default function ProfileSettings() {
             <div className="h-56 rounded-[20px] bg-surface-container animate-pulse" />
             <div className="h-72 rounded-[20px] bg-surface-container animate-pulse" />
           </div>
+        ) : subView === "menu" ? (
+          /* ================================================================ */
+          /* MAIN SETTINGS MENU VIEW                                          */
+          /* ================================================================ */
+          <div className="flex flex-col gap-6 animate-fade-in">
+            {/* ---------- Calorie & Target Calculation Navigation Card ---------- */}
+            <section aria-labelledby={`${uid}-menu-targets`} className="flex flex-col gap-2">
+              <SectionHeading id={`${uid}-menu-targets`}>الأهداف والتغذية</SectionHeading>
+
+              <button
+                id="open-calculator-btn"
+                type="button"
+                onClick={openCalculator}
+                className={`${card} p-4 text-start flex flex-col gap-3 group hover:border-primary/40 active:scale-[0.99] transition-all cursor-pointer ${focusRing}`}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3.5 min-w-0">
+                    <span
+                      aria-hidden="true"
+                      className="w-12 h-12 shrink-0 rounded-2xl bg-primary/10 text-primary flex items-center justify-center transition-colors group-hover:bg-primary group-hover:text-on-primary"
+                    >
+                      <span className="material-symbols-outlined text-[24px]">calculate</span>
+                    </span>
+                    <div className="flex flex-col min-w-0">
+                      <h3 className="text-[16px] font-bold text-on-surface group-hover:text-primary transition-colors">
+                        حساب السعرات والأهداف اليومية
+                      </h3>
+                      <p className="text-[13px] text-on-surface-variant truncate mt-0.5">
+                        هدفك الحالي: {fmt(targets.target_calories)} سعرة يومياً • اضغط للتعديل
+                      </p>
+                    </div>
+                  </div>
+
+                  <span
+                    aria-hidden="true"
+                    className="w-9 h-9 shrink-0 rounded-full bg-surface-container-high flex items-center justify-center text-on-surface-variant group-hover:text-primary group-hover:bg-primary/10 transition-colors"
+                  >
+                    <span className="material-symbols-outlined text-[20px]">arrow_back</span>
+                  </span>
+                </div>
+
+                {/* Badges / summary */}
+                <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-outline-variant/20 text-[12px]">
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-surface-container-high text-on-surface font-semibold tabular-nums">
+                    <span className="w-2 h-2 rounded-full bg-primary" />
+                    {fmt(targets.target_calories)} سعرة
+                  </span>
+                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-surface-container-high text-on-surface-variant font-medium">
+                    {form.goal_type === "lose"
+                      ? "خسارة وزن"
+                      : form.goal_type === "gain"
+                        ? "زيادة وزن وعضل"
+                        : "المحافظة على الوزن"}
+                  </span>
+                  <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-surface-container-high text-on-surface-variant text-[11px] ms-auto">
+                    بروتين {targets.target_protein_g}جم • كارب {targets.target_carbs_g}جم • دهون {targets.target_fat_g}جم
+                  </span>
+                </div>
+              </button>
+            </section>
+
+            {/* ---------- App Settings (Theme) ---------- */}
+            <section aria-labelledby={`${uid}-app`} className="flex flex-col gap-2">
+              <SectionHeading id={`${uid}-app`}>إعدادات التطبيق</SectionHeading>
+              <div className={`${card} p-4 flex flex-col gap-2`}>
+                <span aria-hidden="true" className="text-[15px] text-on-surface">
+                  المظهر
+                </span>
+                <Segmented
+                  name="theme"
+                  legend="المظهر"
+                  options={THEME_OPTIONS}
+                  value={mounted ? theme : null}
+                  onChange={setTheme}
+                />
+                <span className="text-[12px] text-on-surface-variant">
+                  «تلقائي» يتبع إعداد جهازك.
+                </span>
+              </div>
+            </section>
+
+            {/* ---------- Account ---------- */}
+            <section aria-labelledby={`${uid}-account`} className="flex flex-col gap-2">
+              <SectionHeading id={`${uid}-account`}>الحساب</SectionHeading>
+              <div className={card}>
+                <div className="flex items-center gap-3 p-4">
+                  <span
+                    aria-hidden="true"
+                    className="w-11 h-11 shrink-0 rounded-full bg-primary-fixed text-on-primary-fixed flex items-center justify-center text-[17px] font-bold"
+                  >
+                    {initial || <span className="material-symbols-outlined text-[22px]">person</span>}
+                  </span>
+                  <div className="flex flex-col min-w-0">
+                    <span className="text-[12px] text-on-surface-variant">مسجّل الدخول بـ</span>
+                    <span dir="ltr" className="text-[15px] font-semibold text-on-surface truncate text-end">
+                      {contact || "—"}
+                    </span>
+                  </div>
+                </div>
+                <div className={`${rowDivider} p-2`}>
+                  <button
+                    id="profile-sign-out"
+                    type="button"
+                    onClick={handleSignOut}
+                    disabled={signingOut}
+                    className={`w-full h-12 rounded-xl flex items-center justify-center gap-2 text-error text-[15px] font-semibold hover:bg-error-container/40 active:scale-[0.98] transition-[background-color,transform] disabled:opacity-60 ${focusRing}`}
+                  >
+                    <span aria-hidden="true" className="material-symbols-outlined text-[20px]">
+                      logout
+                    </span>
+                    {signingOut ? "جارٍ تسجيل الخروج…" : "تسجيل الخروج"}
+                  </button>
+                </div>
+              </div>
+            </section>
+          </div>
         ) : (
-          <>
+          /* ================================================================ */
+          /* CALORIE & BODY STATS CALCULATOR SUB-VIEW                         */
+          /* ================================================================ */
+          <div className="flex flex-col gap-6 animate-fade-in">
             {/* ---------- Body stats & goal ---------- */}
             <section aria-labelledby={`${uid}-body`} className="flex flex-col gap-2">
               <SectionHeading id={`${uid}-body`}>بيانات الجسم والهدف</SectionHeading>
@@ -858,59 +1056,6 @@ export default function ProfileSettings() {
               </div>
             </section>
 
-            {/* ---------- App settings ---------- */}
-            <section aria-labelledby={`${uid}-app`} className="flex flex-col gap-2">
-              <SectionHeading id={`${uid}-app`}>إعدادات التطبيق</SectionHeading>
-              <div className={`${card} p-4 flex flex-col gap-2`}>
-                <span aria-hidden="true" className="text-[15px] text-on-surface">المظهر</span>
-                <Segmented
-                  name="theme"
-                  legend="المظهر"
-                  options={THEME_OPTIONS}
-                  value={mounted ? theme : null}
-                  onChange={setTheme}
-                />
-                <span className="text-[12px] text-on-surface-variant">
-                  «تلقائي» يتبع إعداد جهازك.
-                </span>
-              </div>
-            </section>
-
-            {/* ---------- Account ---------- */}
-            <section aria-labelledby={`${uid}-account`} className="flex flex-col gap-2">
-              <SectionHeading id={`${uid}-account`}>الحساب</SectionHeading>
-              <div className={card}>
-                <div className="flex items-center gap-3 p-4">
-                  <span
-                    aria-hidden="true"
-                    className="w-11 h-11 shrink-0 rounded-full bg-primary-fixed text-on-primary-fixed flex items-center justify-center text-[17px] font-bold"
-                  >
-                    {initial || <span className="material-symbols-outlined text-[22px]">person</span>}
-                  </span>
-                  <div className="flex flex-col min-w-0">
-                    <span className="text-[12px] text-on-surface-variant">مسجّل الدخول بـ</span>
-                    <span dir="ltr" className="text-[15px] font-semibold text-on-surface truncate text-end">
-                      {contact || "—"}
-                    </span>
-                  </div>
-                </div>
-                <div className={`${rowDivider} p-2`}>
-                  <button
-                    id="profile-sign-out"
-                    type="button"
-                    onClick={handleSignOut}
-                    disabled={signingOut}
-                    className={`w-full h-12 rounded-xl flex items-center justify-center gap-2 text-error text-[15px] font-semibold hover:bg-error-container/40 active:scale-[0.98] transition-[background-color,transform] disabled:opacity-60 ${focusRing}`}
-                  >
-                    <span aria-hidden="true" className="material-symbols-outlined text-[20px]">
-                      logout
-                    </span>
-                    {signingOut ? "جارٍ تسجيل الخروج…" : "تسجيل الخروج"}
-                  </button>
-                </div>
-              </div>
-            </section>
-
             {/* ---------- Sticky save bar (live result + action) ---------- */}
             <div className="sticky bottom-[calc(4.75rem+env(safe-area-inset-bottom))] z-10">
               <div className="flex items-center gap-3 p-2 ps-4 rounded-2xl bg-surface-container-lowest/90 backdrop-blur-xl border border-outline-variant/30 shadow-[0_12px_32px_-4px_rgba(15,23,42,0.14)]">
@@ -949,7 +1094,7 @@ export default function ProfileSettings() {
                 </button>
               </div>
             </div>
-          </>
+          </div>
         )}
       </main>
     </div>
