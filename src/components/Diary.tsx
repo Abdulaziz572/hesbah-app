@@ -1,12 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
+import { useQuery, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import {
   MEAL_TYPES,
   fetchDaySummaries,
   fetchMealsForDay,
-  type DaySummary,
   type DiaryMeal,
 } from "@/src/lib/meals";
 import {
@@ -15,7 +15,6 @@ import {
   isProfileConfigured,
   resolveTargets,
   sumMacros,
-  type UserProfile,
 } from "@/src/lib/nutrition";
 import { useAuth } from "@/src/context/AuthContext";
 import {
@@ -28,11 +27,16 @@ import {
   startOfMonth,
   startOfWeek,
 } from "@/src/lib/dates";
+import { queryKeys, invalidateUserMeals } from "@/src/lib/queryKeys";
+import {
+  CalorieRingSkeleton,
+  MacroCardsSkeleton,
+  MealsTimelineSkeleton,
+} from "./Skeletons";
 import CalendarPicker from "./CalendarPicker";
 import WeeklySummaryCard from "./WeeklySummaryCard";
 import EditMealSheet from "./EditMealSheet";
 import ThemeToggle from "./ThemeToggle";
-
 
 const fmt = (n: number) => Math.round(n).toLocaleString("en-US");
 
@@ -106,139 +110,84 @@ function MacroCard({
 
 export default function Diary() {
   const { user, loading: authLoading, signOut } = useAuth();
+  const userId = user?.id ?? "";
+  const queryClient = useQueryClient();
+
   const [selectedDate, setSelectedDate] = useState<Date>(() => new Date());
-  const [meals, setMeals] = useState<DiaryMeal[] | null>(null);
-  const [daySummaries, setDaySummaries] = useState<Record<string, DaySummary>>({});
-  const [error, setError] = useState<string | null>(null);
-  const [refreshing, setRefreshing] = useState(false);
+  const [viewMonth, setViewMonth] = useState<Date>(() => startOfMonth(selectedDate));
   const [editing, setEditing] = useState<DiaryMeal | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  // Daily targets: seeded from the local cache for an instant first paint, then refreshed.
-  const userId = user?.id ?? "";
-  const [profile, setProfile] = useState<UserProfile | null>(() =>
-    userId ? getCachedUserProfile(userId) : null,
-  );
-  const [isLoadingProfile, setIsLoadingProfile] = useState(true);
-  const [profileChecked, setProfileChecked] = useState(false);
+  const selectedDateKey = localDateString(selectedDate);
 
-  useEffect(() => {
-    if (authLoading) return;
-    if (!userId) {
-      setIsLoadingProfile(false);
-      setProfileChecked(true);
-      return;
-    }
+  // 1. Authoritative User Profile & Targets Query
+  const { data: profile, isLoading: isProfileLoading } = useQuery({
+    queryKey: queryKeys.profile(userId),
+    queryFn: () => getUserProfile(userId),
+    enabled: !!userId,
+    initialData: () => (userId ? getCachedUserProfile(userId) ?? undefined : undefined),
+  });
 
-    // 1. Immediately seed from scoped cache if state is currently null
-    const local = getCachedUserProfile(userId);
-    if (local) {
-      setProfile(local);
-      setIsLoadingProfile(false);
-    }
-
-    let ignore = false;
-    void (async () => {
-      try {
-        const p = await getUserProfile(userId);
-        if (!ignore) {
-          if (p) {
-            setProfile(p);
-          } else if (local) {
-            setProfile(local);
-          }
-          setProfileChecked(true);
-        }
-      } finally {
-        if (!ignore) {
-          setIsLoadingProfile(false);
-        }
-      }
-    })();
-
-    return () => {
-      ignore = true;
-    };
-  }, [userId, authLoading]);
-
-  const targets = resolveTargets(profile);
+  const targets = resolveTargets(profile ?? null);
   const calorieGoal = targets.target_calories;
-  const configured = isProfileConfigured(userId, profile);
-  const showSetupBanner = !authLoading && !isLoadingProfile && profileChecked && !configured;
+  const configured = isProfileConfigured(userId, profile ?? null);
+  const showSetupBanner = !authLoading && !isProfileLoading && !configured;
+
+  // 2. Day Summaries Query (Month before to month after currently viewed calendar month)
+  const summaryRange = useMemo(() => {
+    const from = addMonths(startOfMonth(viewMonth), -1);
+    const to = addMonths(endOfMonth(viewMonth), 1);
+    return {
+      from,
+      to,
+      fromKey: localDateString(from),
+      toKey: localDateString(to),
+    };
+  }, [viewMonth]);
+
+  const { data: daySummaries = {}, isFetching: isSummariesFetching } = useQuery({
+    queryKey: queryKeys.summaries(userId, summaryRange.fromKey, summaryRange.toKey),
+    queryFn: () => fetchDaySummaries(summaryRange.from, summaryRange.to, userId),
+    enabled: !!userId,
+    placeholderData: keepPreviousData,
+  });
+
+  // 3. Meals for Selected Day Query
+  const {
+    data: meals,
+    isLoading: isMealsLoading,
+    isFetching: isMealsFetching,
+    error: mealsError,
+    refetch: refetchMeals,
+  } = useQuery({
+    queryKey: queryKeys.meals(userId, selectedDateKey),
+    queryFn: () => fetchMealsForDay(selectedDate, userId),
+    enabled: !!userId,
+    placeholderData: keepPreviousData,
+  });
+
+  const isColdLoading = !meals && isMealsLoading;
+  const isRefreshing = isMealsFetching || isSummariesFetching;
 
   const today = useMemo(() => new Date(), []);
   const isSelectedToday = isSameDay(selectedDate, today);
   const isSelectedYesterday = isSameDay(selectedDate, addDays(today, -1));
-
   const weekStart = useMemo(() => startOfWeek(selectedDate), [selectedDate]);
-
-  // Load summaries for range (month before to month after)
-  const loadSummaries = useCallback(async (baseDate: Date) => {
-    try {
-      const from = addMonths(startOfMonth(baseDate), -1);
-      const to = addMonths(endOfMonth(baseDate), 1);
-      const sums = await fetchDaySummaries(from, to);
-      setDaySummaries((prev) => ({ ...prev, ...sums }));
-    } catch (e) {
-      console.error("[diary] failed to load summaries", e);
-    }
-  }, []);
-
-  // Reload data for the currently selected date
-  const loadData = useCallback(async (d: Date) => {
-    setRefreshing(true);
-    try {
-      const data = await fetchMealsForDay(d);
-      setMeals(data);
-      setError(null);
-      void loadSummaries(d);
-    } catch (e: unknown) {
-      console.error(e);
-      const msg = e instanceof Error ? e.message : "تعذّر تحميل وجبات هذا اليوم. حاول مرة أخرى.";
-      setError(msg);
-    } finally {
-      setRefreshing(false);
-    }
-  }, [loadSummaries]);
-
-  // Asynchronous load whenever selectedDate changes
-  useEffect(() => {
-    let ignore = false;
-    void (async () => {
-      try {
-        const [data, sums] = await Promise.all([
-          fetchMealsForDay(selectedDate),
-          fetchDaySummaries(
-            addMonths(startOfMonth(selectedDate), -1),
-            addMonths(endOfMonth(selectedDate), 1),
-          ),
-        ]);
-        if (!ignore) {
-          setMeals(data);
-          setDaySummaries((prev) => ({ ...prev, ...sums }));
-          setError(null);
-        }
-      } catch (e: unknown) {
-        if (!ignore) {
-          console.error(e);
-          setError("تعذّر تحميل وجبات هذا اليوم. حاول مرة أخرى.");
-        }
-      }
-    })();
-
-    return () => {
-      ignore = true;
-    };
-  }, [selectedDate]);
 
   const totals = useMemo(() => sumMacros((meals ?? []).map((m) => m.totals)), [meals]);
 
-  /** Show today's diary after a meal was copied into it, with a short confirmation. */
+  const handleMonthChange = useCallback((d: Date) => {
+    setViewMonth(startOfMonth(d));
+  }, []);
+
+  /** Show today's diary after a meal was copied into it */
   async function showTodayAfterCopy() {
     setNotice("تمت إضافة الوجبة إلى اليوم الحالي");
     window.setTimeout(() => setNotice(null), 3500);
-    if (isSelectedToday) await loadData(today);
-    else setSelectedDate(new Date());
+    await invalidateUserMeals(queryClient, userId);
+    if (!isSelectedToday) {
+      setSelectedDate(new Date());
+    }
   }
 
   const dateLabel = isSelectedToday
@@ -247,7 +196,11 @@ export default function Diary() {
     ? "أمس"
     : formatDayFull(selectedDate);
 
-  const selectedDateKey = localDateString(selectedDate);
+  const errorMessage = mealsError instanceof Error
+    ? mealsError.message
+    : mealsError
+    ? "تعذّر تحميل وجبات هذا اليوم. حاول مرة أخرى."
+    : null;
 
   return (
     <div className="max-w-md w-full mx-auto min-h-screen flex flex-col pb-28">
@@ -264,8 +217,11 @@ export default function Diary() {
         </div>
 
         <div className="flex items-center gap-2">
-          {refreshing && (
-            <span className="w-4 h-4 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
+          {isRefreshing && (
+            <span
+              title="جاري التحديث في الخلفية"
+              className="w-4 h-4 border-2 border-primary/30 border-t-primary rounded-full animate-spin"
+            />
           )}
 
           <ThemeToggle />
@@ -291,6 +247,7 @@ export default function Diary() {
           <Link
             id="profile-setup-banner"
             href="/profile"
+            prefetch={true}
             className="flex items-center gap-3 p-3.5 rounded-2xl bg-primary-fixed/40 dark:bg-primary-fixed/60 border border-primary/20 text-on-surface active:scale-[0.99] transition-transform focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
           >
             <span
@@ -314,7 +271,7 @@ export default function Diary() {
             selectedDate={selectedDate}
             onSelectDate={setSelectedDate}
             daySummaries={daySummaries}
-            onMonthChange={loadSummaries}
+            onMonthChange={handleMonthChange}
           />
         </section>
 
@@ -339,6 +296,7 @@ export default function Diary() {
           </div>
           <Link
             href={`/add?date=${selectedDateKey}`}
+            prefetch={true}
             className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl bg-primary text-on-primary text-[12px] font-semibold active:scale-95 shadow-sm shadow-primary/20 transition-transform"
           >
             <span className="material-symbols-outlined text-[16px]">add</span>
@@ -347,28 +305,36 @@ export default function Diary() {
         </div>
 
         {/* 3. Calorie Progress Ring Summary for Selected Date */}
-        <section
-          aria-label="ملخص السعرات لليوم المحدد"
-          className="bg-surface-container-lowest rounded-[24px] p-5 shadow-sm border border-outline-variant/20 flex items-center gap-5"
-        >
-          <Ring value={totals.calories} goal={calorieGoal} />
-          <div className="flex flex-col gap-1">
-            <span className="text-[13px] text-on-surface-variant">
-              {totals.calories <= calorieGoal ? "المتبقي لهذا اليوم" : "تجاوزت الهدف اليومي بـ"}
-            </span>
-            <span className={`text-[24px] font-bold ${totals.calories > calorieGoal ? "text-error" : "text-primary"}`}>
-              {fmt(Math.abs(calorieGoal - totals.calories))}
-            </span>
-            <span className="text-[12px] text-on-surface-variant">سعرة حرارية</span>
-          </div>
-        </section>
+        {isColdLoading ? (
+          <CalorieRingSkeleton />
+        ) : (
+          <section
+            aria-label="ملخص السعرات لليوم المحدد"
+            className="bg-surface-container-lowest rounded-[24px] p-5 shadow-sm border border-outline-variant/20 flex items-center gap-5"
+          >
+            <Ring value={totals.calories} goal={calorieGoal} />
+            <div className="flex flex-col gap-1">
+              <span className="text-[13px] text-on-surface-variant">
+                {totals.calories <= calorieGoal ? "المتبقي لهذا اليوم" : "تجاوزت الهدف اليومي بـ"}
+              </span>
+              <span className={`text-[24px] font-bold ${totals.calories > calorieGoal ? "text-error" : "text-primary"}`}>
+                {fmt(Math.abs(calorieGoal - totals.calories))}
+              </span>
+              <span className="text-[12px] text-on-surface-variant">سعرة حرارية</span>
+            </div>
+          </section>
+        )}
 
         {/* Macronutrients breakdown for Selected Date */}
-        <section aria-label="المغذيات" className="flex gap-3">
-          <MacroCard label="بروتين" value={totals.protein} goal={targets.target_protein_g} color="text-secondary" bar="bg-secondary" />
-          <MacroCard label="كربوهيدرات" value={totals.carbs} goal={targets.target_carbs_g} color="text-tertiary" bar="bg-tertiary" />
-          <MacroCard label="دهون" value={totals.fat} goal={targets.target_fat_g} color="text-primary" bar="bg-primary" />
-        </section>
+        {isColdLoading ? (
+          <MacroCardsSkeleton />
+        ) : (
+          <section aria-label="المغذيات" className="flex gap-3">
+            <MacroCard label="بروتين" value={totals.protein} goal={targets.target_protein_g} color="text-secondary" bar="bg-secondary" />
+            <MacroCard label="كربوهيدرات" value={totals.carbs} goal={targets.target_carbs_g} color="text-tertiary" bar="bg-tertiary" />
+            <MacroCard label="دهون" value={totals.fat} goal={targets.target_fat_g} color="text-primary" bar="bg-primary" />
+          </section>
+        )}
 
         {/* Meals Timeline for Selected Date */}
         <section aria-label="وجبات اليوم المحدد" className="flex flex-col gap-3">
@@ -383,12 +349,12 @@ export default function Diary() {
             )}
           </div>
 
-          {error && (
+          {errorMessage && (
             <div className="p-3.5 rounded-xl bg-error-container text-on-error-container text-[13px] flex items-center justify-between">
-              <span>{error}</span>
+              <span>{errorMessage}</span>
               <button
                 type="button"
-                onClick={() => void loadData(selectedDate)}
+                onClick={() => void refetchMeals()}
                 className="text-[12px] font-bold underline ps-2"
               >
                 إعادة المحاولة
@@ -408,15 +374,9 @@ export default function Diary() {
             </div>
           )}
 
-          {!error && meals === null && (
-            <div className="flex flex-col gap-3" aria-busy="true">
-              {[0, 1].map((i) => (
-                <div key={i} className="h-24 rounded-2xl bg-surface-container animate-pulse" />
-              ))}
-            </div>
-          )}
+          {isColdLoading && <MealsTimelineSkeleton />}
 
-          {meals?.length === 0 && (
+          {!isColdLoading && meals?.length === 0 && (
             <div className="bg-surface-container-low rounded-2xl p-7 flex flex-col items-center gap-3 text-center border border-outline-variant/20">
               <span className="material-symbols-outlined text-[40px] text-outline">restaurant</span>
               <div className="flex flex-col gap-1">
@@ -431,6 +391,7 @@ export default function Diary() {
               </div>
               <Link
                 href={`/add?date=${selectedDateKey}`}
+                prefetch={true}
                 className="mt-1 h-11 px-6 rounded-xl bg-primary text-on-primary text-[14px] font-semibold flex items-center gap-2 active:scale-95 shadow-md shadow-primary/20 transition-transform"
               >
                 <span className="material-symbols-outlined text-[20px]">add</span>
@@ -439,7 +400,7 @@ export default function Diary() {
             </div>
           )}
 
-          {meals && meals.length > 0 && (
+          {!isColdLoading && meals && meals.length > 0 && (
             <ol className="relative flex flex-col gap-3 ps-6 before:content-[''] before:absolute before:top-2 before:bottom-2 before:start-[7px] before:w-0.5 before:bg-outline-variant/40">
               {meals.map((m) => {
                 const meta = MEAL_LABEL[m.mealType ?? ""] ?? { label: "وجبة", icon: "restaurant" };
@@ -520,7 +481,7 @@ export default function Diary() {
           isPastDate={!isSelectedToday}
           onClose={() => setEditing(null)}
           onSaved={async () => {
-            await loadData(selectedDate);
+            await invalidateUserMeals(queryClient, userId);
             setEditing(null);
           }}
           onCopied={async () => {

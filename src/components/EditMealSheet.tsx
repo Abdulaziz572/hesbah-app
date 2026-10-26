@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   copyMealToDate,
   deleteMeal,
@@ -10,7 +11,15 @@ import {
   type DiaryMeal,
   type MealType,
 } from "@/src/lib/meals";
-import { sumMacros, type Macros } from "@/src/lib/nutrition";
+import { useAuth } from "@/src/context/AuthContext";
+import { invalidateUserMeals } from "@/src/lib/queryKeys";
+import {
+  sumMacros,
+  calculateItemMacros,
+  normalizeMacroNutrients,
+  type Macros,
+} from "@/src/lib/nutrition";
+import { searchCuratedFallback } from "@/src/lib/foodLookup";
 import MealTypePicker from "./MealTypePicker";
 import MealItemsEditor, { type MealEditorItem } from "./MealItemsEditor";
 
@@ -32,6 +41,8 @@ const focusRing =
   "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary";
 
 export default function EditMealSheet({ meal, isPastDate, onClose, onSaved, onCopied }: Props) {
+  const { user } = useAuth();
+  const queryClient = useQueryClient();
   const [title, setTitle] = useState(meal.title ?? "");
   const [note, setNote] = useState(meal.customNote ?? "");
   const [bookmarked, setBookmarked] = useState(!!meal.isSaved);
@@ -45,24 +56,27 @@ export default function EditMealSheet({ meal, isPastDate, onClose, onSaved, onCo
   // Initialize items using MealEditorItem
   const [items, setItems] = useState<MealEditorItem[]>(() =>
     meal.items.map((it) => {
-      const g = it.grams || 100;
-      const f = g / 100;
-      const p100 = it.per100g ?? {
-        calories: Math.round(it.calories / f),
-        protein: Math.round((it.protein / f) * 10) / 10,
-        carbs: Math.round((it.carbs / f) * 10) / 10,
-        fat: Math.round((it.fat / f) * 10) / 10,
-      };
+      const p100 = normalizeMacroNutrients(it.per100g);
+      if (p100.calories === 0 && it.calories > 0 && it.grams > 0) {
+        const factor = 100 / it.grams;
+        p100.calories = Math.round(it.calories * factor);
+        p100.protein_g = Math.round(it.protein * factor * 10) / 10;
+        p100.carbs_g = Math.round(it.carbs * factor * 10) / 10;
+        p100.fat_g = Math.round(it.fat * factor * 10) / 10;
+      }
+      const derived = calculateItemMacros(p100, it.grams);
+      const curated = searchCuratedFallback(it.name);
 
       return {
         id: it.id,
         name: it.name,
         grams: it.grams,
-        calories: it.calories,
-        protein: it.protein,
-        carbs: it.carbs,
-        fat: it.fat,
+        calories: it.calories > 0 ? it.calories : derived.calories,
+        protein: it.protein > 0 ? it.protein : derived.protein_g,
+        carbs: it.carbs > 0 ? it.carbs : derived.carbs_g,
+        fat: it.fat > 0 ? it.fat : derived.fat_g,
         per100g: p100,
+        reference_unit_g: (it as any).reference_unit_g ?? curated?.reference_unit_g ?? null,
       };
     }),
   );
@@ -150,6 +164,7 @@ export default function EditMealSheet({ meal, isPastDate, onClose, onSaved, onCo
         customNote: note.trim() !== (meal.customNote ?? "") ? note.trim() : undefined,
         isSaved: bookmarked !== !!meal.isSaved ? bookmarked : undefined,
       });
+      await invalidateUserMeals(queryClient, user?.id ?? "");
       await onSaved();
     } catch (e: unknown) {
       console.error(e);
@@ -164,6 +179,7 @@ export default function EditMealSheet({ meal, isPastDate, onClose, onSaved, onCo
     setError(null);
     try {
       await deleteMeal(meal.id);
+      await invalidateUserMeals(queryClient, user?.id ?? "");
       await onSaved();
     } catch (e: unknown) {
       console.error(e);
@@ -179,6 +195,7 @@ export default function EditMealSheet({ meal, isPastDate, onClose, onSaved, onCo
     setError(null);
     try {
       await copyMealToDate({ ...meal, customNote: note.trim() || null });
+      await invalidateUserMeals(queryClient, user?.id ?? "");
       await (onCopied ?? onSaved)();
     } catch (e: unknown) {
       console.error(e);

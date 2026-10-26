@@ -4,6 +4,7 @@ import "./globals.css";
 import { AuthProvider } from "@/src/context/AuthContext";
 import AuthGuard from "@/src/components/AuthGuard";
 import ThemeProvider from "@/src/components/ThemeProvider";
+import QueryProvider from "@/src/context/QueryProvider";
 import { THEME_INIT_SCRIPT } from "@/src/lib/theme-script";
 
 const plex = IBM_Plex_Sans_Arabic({
@@ -39,9 +40,11 @@ export default function RootLayout({
       </head>
       <body className="min-h-full flex flex-col">
         <ThemeProvider>
-          <AuthProvider>
-            <AuthGuard>{children}</AuthGuard>
-          </AuthProvider>
+          <QueryProvider>
+            <AuthProvider>
+              <AuthGuard>{children}</AuthGuard>
+            </AuthProvider>
+          </QueryProvider>
         </ThemeProvider>
       </body>
     </html>

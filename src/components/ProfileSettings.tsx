@@ -1,8 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/src/context/AuthContext";
 import { useTheme, type Theme } from "@/src/context/ThemeContext";
+import { queryKeys, invalidateUserProfile } from "@/src/lib/queryKeys";
 import {
   ACTIVITY_MULTIPLIERS,
   GOAL_ADJUSTMENTS,
@@ -468,29 +470,23 @@ export default function ProfileSettings() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [subView, closeCalculator]);
 
-  // Fetch the authoritative profile (Supabase → localStorage fallback).
+  const queryClient = useQueryClient();
+
+  // Fetch the authoritative profile with TanStack Query (Supabase → localStorage fallback).
+  const { data: profileData } = useQuery({
+    queryKey: queryKeys.profile(userId),
+    queryFn: () => getUserProfile(userId),
+    enabled: !!userId,
+    initialData: () => (userId ? getCachedUserProfile(userId) ?? undefined : undefined),
+  });
+
   useEffect(() => {
-    if (!userId) return;
-    const local = getCachedUserProfile(userId);
-    if (local && !touchedRef.current) {
-      setSaved(local);
-      setForm(local);
+    if (profileData && !touchedRef.current) {
+      setSaved(profileData);
+      setForm(profileData);
       setLoaded(true);
     }
-    let ignore = false;
-    void (async () => {
-      const p = await getUserProfile(userId);
-      if (ignore) return;
-      if (p) {
-        setSaved(p);
-        if (!touchedRef.current) setForm(p);
-      }
-      setLoaded(true);
-    })();
-    return () => {
-      ignore = true;
-    };
-  }, [userId]);
+  }, [profileData]);
 
   const update = useCallback((patch: Partial<UserProfile>) => {
     touchedRef.current = true;
@@ -566,6 +562,7 @@ export default function ProfileSettings() {
     setTouched(false);
     setSaving(false);
     setToast({ id: Date.now(), synced: res.synced });
+    await invalidateUserProfile(queryClient, userId);
   }
 
   async function handleSignOut() {

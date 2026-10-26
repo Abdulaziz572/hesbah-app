@@ -1,7 +1,13 @@
 "use client";
 
 import { useEffect, useId, useState } from "react";
-import type { Macros } from "@/src/lib/nutrition";
+import {
+  calculateItemMacros,
+  createMacroNutrients,
+  normalizeMacroNutrients,
+  type Macros,
+  type MacroNutrients,
+} from "@/src/lib/nutrition";
 import type { ReparsedSingleItem } from "@/src/lib/ai/types";
 import GramsStepper from "./GramsStepper";
 
@@ -9,16 +15,21 @@ export interface MealEditorItem {
   id: string;
   name: string;
   grams: number;
-  per100g: Macros;
+  per100g: MacroNutrients | Macros;
   calories: number;
   protein: number;
   carbs: number;
   fat: number;
   badge?: {
-    type: "verified" | "ai_estimate" | "unmatched" | "ai_edited" | "manual";
+    type: "verified" | "curated" | "ai_estimate" | "unmatched" | "ai_edited" | "manual";
     label: string;
   };
   originalFoodId?: string | null;
+  reference_unit_g?: number | null;
+  default_portion_g?: number | null;
+  portion_assumed?: boolean;
+  plausibility_warning?: string | null;
+  category?: string;
 }
 
 interface Props {
@@ -78,19 +89,20 @@ export default function MealItemsEditor({ items, onChange, disabled }: Props) {
   }, [highlightedId]);
 
   // Grams update handler
-  function updateGrams(id: string, newGrams: number) {
+  function updateGrams(id: string, newGrams: number, clearAssumed = false) {
     const safeGrams = Math.max(0, Math.min(5000, newGrams));
     onChange(
       items.map((it) => {
         if (it.id !== id) return it;
-        const f = safeGrams / 100;
+        const derived = calculateItemMacros(it.per100g, safeGrams);
         return {
           ...it,
           grams: safeGrams,
-          calories: Math.round(it.per100g.calories * f),
-          protein: Math.round(it.per100g.protein * f * 10) / 10,
-          carbs: Math.round(it.per100g.carbs * f * 10) / 10,
-          fat: Math.round(it.per100g.fat * f * 10) / 10,
+          calories: derived.calories,
+          protein: derived.protein_g,
+          carbs: derived.carbs_g,
+          fat: derived.fat_g,
+          portion_assumed: clearAssumed ? false : it.portion_assumed,
         };
       }),
     );
@@ -151,6 +163,9 @@ export default function MealItemsEditor({ items, onChange, disabled }: Props) {
             protein: updated.protein,
             carbs: updated.carbs,
             fat: updated.fat,
+            reference_unit_g: updated.reference_unit_g ?? it.reference_unit_g,
+            portion_assumed: updated.portion_assumed ?? false,
+            plausibility_warning: updated.plausibility_warning ?? null,
             badge: { type: "ai_edited", label: "معدّل بالـ AI ✨" },
           };
         }),
@@ -188,13 +203,14 @@ export default function MealItemsEditor({ items, onChange, disabled }: Props) {
     const carbs = Math.max(0, manualForm.carbs);
     const fat = Math.max(0, manualForm.fat);
 
-    const factor = grams / 100;
-    const per100g: Macros = {
-      calories: Math.round(calories / factor),
-      protein: Math.round((protein / factor) * 10) / 10,
-      carbs: Math.round((carbs / factor) * 10) / 10,
-      fat: Math.round((fat / factor) * 10) / 10,
-    };
+    const factor = grams > 0 ? grams / 100 : 1;
+    const per100g = createMacroNutrients(
+      calories / factor,
+      protein / factor,
+      carbs / factor,
+      fat / factor,
+    );
+    const derived = calculateItemMacros(per100g, grams);
 
     onChange(
       items.map((it) => {
@@ -203,10 +219,10 @@ export default function MealItemsEditor({ items, onChange, disabled }: Props) {
           ...it,
           name: manualForm.name.trim(),
           grams,
-          calories,
-          protein,
-          carbs,
-          fat,
+          calories: derived.calories,
+          protein: derived.protein_g,
+          carbs: derived.carbs_g,
+          fat: derived.fat_g,
           per100g,
           badge: { type: "manual", label: "تعديل يدوي ✏️" },
         };
@@ -247,6 +263,9 @@ export default function MealItemsEditor({ items, onChange, disabled }: Props) {
         protein: newItem.protein,
         carbs: newItem.carbs,
         fat: newItem.fat,
+        reference_unit_g: newItem.reference_unit_g,
+        portion_assumed: newItem.portion_assumed ?? false,
+        plausibility_warning: newItem.plausibility_warning ?? null,
         badge: { type: "ai_edited", label: "مضاف بالـ AI ✨" },
       };
 
@@ -271,22 +290,23 @@ export default function MealItemsEditor({ items, onChange, disabled }: Props) {
     const carbs = Math.max(0, addManualForm.carbs);
     const fat = Math.max(0, addManualForm.fat);
 
-    const factor = grams / 100;
-    const per100g: Macros = {
-      calories: Math.round(calories / factor),
-      protein: Math.round((protein / factor) * 10) / 10,
-      carbs: Math.round((carbs / factor) * 10) / 10,
-      fat: Math.round((fat / factor) * 10) / 10,
-    };
+    const factor = grams > 0 ? grams / 100 : 1;
+    const per100g = createMacroNutrients(
+      calories / factor,
+      protein / factor,
+      carbs / factor,
+      fat / factor,
+    );
+    const derived = calculateItemMacros(per100g, grams);
 
     const createdItem: MealEditorItem = {
       id: `manual-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       name: addManualForm.name.trim(),
       grams,
-      calories,
-      protein,
-      carbs,
-      fat,
+      calories: derived.calories,
+      protein: derived.protein_g,
+      carbs: derived.carbs_g,
+      fat: derived.fat_g,
       per100g,
       badge: { type: "manual", label: "إدخال يدوي ✏️" },
     };
@@ -337,7 +357,7 @@ export default function MealItemsEditor({ items, onChange, disabled }: Props) {
                     {it.badge && (
                       <span
                         className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold ${
-                          it.badge.type === "verified"
+                          it.badge.type === "verified" || it.badge.type === "curated"
                             ? "bg-primary-fixed text-on-primary-fixed"
                             : it.badge.type === "ai_edited"
                             ? "bg-secondary-container/20 text-secondary"
@@ -351,7 +371,22 @@ export default function MealItemsEditor({ items, onChange, disabled }: Props) {
                         {it.badge.label}
                       </span>
                     )}
+                    {it.portion_assumed && (
+                      <span
+                        title="حصة افتراضية — يمكنك تعديل الكمية"
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10.5px] font-medium bg-secondary-fixed/40 text-on-secondary-fixed-variant"
+                      >
+                        <span className="material-symbols-outlined text-[12px]">scale</span>
+                        <span>حصة افتراضية</span>
+                      </span>
+                    )}
                   </div>
+                  {it.plausibility_warning && (
+                    <div className="flex items-center gap-1 text-[11px] text-amber-700 dark:text-amber-400 font-medium bg-amber-500/10 px-2 py-0.5 rounded-lg mt-0.5">
+                      <span className="material-symbols-outlined text-[13px] shrink-0">info</span>
+                      <span className="line-clamp-1">{it.plausibility_warning}</span>
+                    </div>
+                  )}
                   <span className="text-[12px] text-secondary font-semibold">
                     بروتين {fmtDec(it.protein)}g • كربوهيدرات {fmtDec(it.carbs)}g • دهون {fmtDec(it.fat)}g
                   </span>
@@ -363,6 +398,48 @@ export default function MealItemsEditor({ items, onChange, disabled }: Props) {
                   </span>
                 </div>
               </div>
+
+              {/* Portion Chips (ربع / نص / كامل) when reference_unit_g exists */}
+              {it.reference_unit_g != null && it.reference_unit_g > 0 && (
+                <div className="flex items-center justify-between gap-1.5 pt-2 border-t border-outline-variant/15 flex-wrap">
+                  <div className="flex items-center gap-1 text-[11px] font-medium text-on-surface-variant">
+                    <span className="material-symbols-outlined text-[14px]">pie_chart</span>
+                    <span>تحديد الحصة:</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    {[
+                      { label: "ربع", factor: 0.25 },
+                      { label: "نص", factor: 0.5 },
+                      { label: "كامل", factor: 1.0 },
+                    ].map((chip) => {
+                      const chipGrams = Math.round(it.reference_unit_g! * chip.factor);
+                      const isActive = it.grams === chipGrams;
+                      return (
+                        <button
+                          key={chip.label}
+                          type="button"
+                          disabled={disabled}
+                          onClick={() => updateGrams(it.id, chipGrams, true)}
+                          className={`h-7 px-2.5 rounded-lg text-[12px] font-semibold transition-all active:scale-95 flex items-center gap-1 ${
+                            isActive
+                              ? "bg-primary text-on-primary shadow-xs ring-1 ring-primary"
+                              : "bg-surface-container hover:bg-surface-container-high text-on-surface"
+                          }`}
+                        >
+                          <span>{chip.label}</span>
+                          <span
+                            className={`text-[10px] tabular-nums ${
+                              isActive ? "text-on-primary/80" : "text-on-surface-variant"
+                            }`}
+                          >
+                            ({chipGrams}g)
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
               {/* Bottom row: Stepper and Action buttons */}
               <div className="flex items-center justify-between gap-2 pt-1 border-t border-outline-variant/20">

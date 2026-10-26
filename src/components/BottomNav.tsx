@@ -23,13 +23,14 @@ export default function BottomNav() {
             <li key={t.href} className="flex-1">
               <Link
                 href={t.href}
+                prefetch={true}
                 aria-current={active ? "page" : undefined}
-                className={`flex flex-col items-center justify-center gap-0.5 h-16 text-[12px] font-semibold transition-colors ${
-                  active ? "text-primary" : "text-on-surface-variant"
+                className={`flex flex-col items-center justify-center gap-0.5 h-16 text-[12px] font-semibold transition-all duration-150 select-none active:scale-90 active:opacity-75 ${
+                  active ? "text-primary" : "text-on-surface-variant hover:text-on-surface"
                 }`}
               >
                 <span
-                  className={`px-5 py-1 rounded-full transition-colors ${active ? "bg-primary-fixed" : ""}`}
+                  className={`px-5 py-1 rounded-full transition-colors duration-150 ${active ? "bg-primary-fixed" : ""}`}
                 >
                   <span
                     className="material-symbols-outlined text-[24px]"

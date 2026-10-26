@@ -1,3 +1,44 @@
+export type FoodState = "cooked" | "raw" | "ready_to_eat";
+export type MacroSource = "db_match" | "label_ocr" | "ai_estimate" | "manual_override";
+
+export type FoodCategory =
+  | "bread_pastry"
+  | "rice_grain"
+  | "traditional_dish"
+  | "meat_poultry"
+  | "legume"
+  | "snack_fastfood"
+  | "fruit_dates"
+  | "dairy_egg"
+  | "beverage"
+  | "other";
+
+export interface MacroNutrients {
+  calories: number;
+  protein_g: number;
+  carbs_g: number;
+  fat_g: number;
+}
+
+export interface MealItem {
+  id: string;
+  canonical_name: string;
+  display_name_ar: string;
+  grams: number;
+  unit_type?: "g" | "ml";
+  state: FoodState;
+  category?: FoodCategory;
+  per_100g: MacroNutrients;
+  source: MacroSource;
+  food_id?: string | null;
+  confidence: "high" | "medium" | "low";
+  portion_assumed: boolean;
+  default_portion_g?: number | null;
+  default_full_loaf_or_unit_g?: number | null;
+  reference_unit_g?: number | null;
+  plausibility_warning?: string | null;
+}
+
 export type CookingState = "raw" | "cooked" | "dry" | "unknown";
 export type Confidence = "high" | "medium" | "low";
 export type QuantityBasis = "user_stated" | "visual_guess" | "unknown";
@@ -18,10 +59,16 @@ export interface AiEstimatedPer100g {
 export interface ParsedItem {
   name_en: string;
   name_ar: string;
+  canonical_name?: string;
+  category?: FoodCategory;
   cooking_state: CookingState;
   confidence: Confidence;
   visible: boolean;
   quantity: ParsedItemQuantity;
+  extracted_grams?: number | null;
+  fraction_of_reference?: number | null;
+  portion_assumed?: boolean;
+  ai_fallback_per_100g?: AiEstimatedPer100g;
   ai_estimated_per_100g?: AiEstimatedPer100g;
   needs_user_confirmation: string[];
   warnings: string[];
@@ -75,6 +122,7 @@ export interface SingleItemInput {
   name?: string;
   name_ar?: string;
   name_en?: string;
+  category?: FoodCategory;
   grams?: number;
   calories?: number;
   protein?: number;
@@ -92,6 +140,7 @@ export interface SingleItemInput {
 export interface ReparsedSingleItem {
   name_ar: string;
   name_en: string;
+  category?: FoodCategory;
   grams: number;
   per100g: {
     calories: number;
@@ -104,6 +153,8 @@ export interface ReparsedSingleItem {
   carbs: number;
   fat: number;
   cooking_state?: CookingState;
+  reference_unit_g?: number | null;
+  portion_assumed?: boolean;
+  plausibility_warning?: string | null;
   notes?: string;
 }
-

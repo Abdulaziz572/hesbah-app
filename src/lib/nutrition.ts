@@ -1,20 +1,29 @@
-import type { ParsedItem } from "./ai/types";
+import type {
+  ParsedItem,
+  MacroNutrients,
+  MealItem,
+  FoodState,
+  MacroSource,
+  FoodCategory,
+} from "./ai/types";
 import { findFood } from "./foodLookup";
 import { supabase } from "./supabaseClient";
+
+export type { MacroNutrients, MealItem, FoodState, MacroSource, FoodCategory };
 
 export interface FoodNutrition {
   id: string;
   name_ar: string;
   name_en: string;
-  /** "db" = Supabase foods table (high confidence); "ai" = Gemini per-100g estimate. */
+  /** "db" = Supabase foods table / curated reference; "ai" = Gemini per-100g estimate. */
   source: "db" | "ai";
   /** Values per 100g (or 100ml for drinks), read from the `per_100g` JSONB column. */
-  per100g: {
-    calories: number;
-    protein: number;
-    carbs: number;
-    fat: number;
-  };
+  per100g: MacroNutrients;
+  category?: FoodCategory;
+  default_portion_g?: number;
+  reference_unit_g?: number;
+  uncertainty_level?: "low" | "medium" | "high";
+  verification_notes?: string;
 }
 
 export interface Macros {
@@ -22,6 +31,9 @@ export interface Macros {
   protein: number;
   carbs: number;
   fat: number;
+  protein_g?: number;
+  carbs_g?: number;
+  fat_g?: number;
 }
 
 export interface ReviewItem {
@@ -31,49 +43,284 @@ export interface ReviewItem {
   grams: number;
 }
 
-export function calcMacros(food: FoodNutrition | null, grams: number): Macros {
-  if (!food || !Number.isFinite(grams) || grams <= 0) {
-    return { calories: 0, protein: 0, carbs: 0, fat: 0 };
-  }
-  const f = grams / 100;
-  const p = food.per100g;
+/**
+ * Creates a valid, clean MacroNutrients object with sanitized positive numbers
+ * rounded to standard precision (calories integer, macros 1 decimal place).
+ */
+export function createMacroNutrients(
+  calories: number,
+  protein_g: number,
+  carbs_g: number,
+  fat_g: number,
+): MacroNutrients {
+  const p = Math.max(0, Number.isFinite(protein_g) ? protein_g : 0);
+  const c = Math.max(0, Number.isFinite(carbs_g) ? carbs_g : 0);
+  const f = Math.max(0, Number.isFinite(fat_g) ? fat_g : 0);
+  const cal = Math.max(0, Number.isFinite(calories) ? calories : 0);
+  const roundedProt = Math.round(p * 10) / 10;
+  const roundedCarbs = Math.round(c * 10) / 10;
+  const roundedFat = Math.round(f * 10) / 10;
   return {
-    calories: p.calories * f,
-    protein: p.protein * f,
-    carbs: p.carbs * f,
-    fat: p.fat * f,
+    calories: Math.round(cal),
+    protein_g: roundedProt,
+    carbs_g: roundedCarbs,
+    fat_g: roundedFat,
   };
 }
 
-export function sumMacros(list: Macros[]): Macros {
-  return list.reduce(
-    (a, m) => ({
-      calories: a.calories + m.calories,
-      protein: a.protein + m.protein,
-      carbs: a.carbs + m.carbs,
-      fat: a.fat + m.fat,
-    }),
-    { calories: 0, protein: 0, carbs: 0, fat: 0 },
+/**
+ * Normalizes any legacy or variant JSON/object into canonical MacroNutrients.
+ * Handles: 'kcal' vs 'calories', 'protein_g' vs 'protein', stringified numbers, etc.
+ */
+export function normalizeMacroNutrients(raw: unknown): MacroNutrients {
+  if (!raw || typeof raw !== "object") {
+    return createMacroNutrients(0, 0, 0, 0);
+  }
+  const obj = raw as Record<string, unknown>;
+  const lower: Record<string, unknown> = {};
+  for (const k of Object.keys(obj)) {
+    lower[k.toLowerCase()] = obj[k];
+  }
+
+  const pickNum = (keys: string[]): number => {
+    for (const k of keys) {
+      const v = lower[k.toLowerCase()];
+      if (v !== undefined && v !== null) {
+        const n = typeof v === "string" ? parseFloat(v) : Number(v);
+        if (Number.isFinite(n)) return n;
+      }
+    }
+    return 0;
+  };
+
+  const calories = pickNum(["calories", "kcal", "energy_kcal", "calories_kcal", "cal", "energy"]);
+  const protein_g = pickNum(["protein_g", "protein", "proteins"]);
+  const carbs_g = pickNum(["carbs_g", "carbs", "carbohydrates", "carbohydrates_g", "carb"]);
+  const fat_g = pickNum(["fat_g", "fat", "fats", "total_fat"]);
+
+  return createMacroNutrients(calories, protein_g, carbs_g, fat_g);
+}
+
+/**
+ * Single source of truth calculation:
+ * Deterministically derives item totals from its per_100g base.
+ * Guaranteed never to double-scale.
+ * macro = round((per_100g.macro * grams) / 100)
+ */
+export function calculateItemMacros(
+  per_100g: MacroNutrients | Macros,
+  grams: number,
+): MacroNutrients {
+  if (!Number.isFinite(grams) || grams <= 0) {
+    return createMacroNutrients(0, 0, 0, 0);
+  }
+  const norm = normalizeMacroNutrients(per_100g);
+  const factor = grams / 100;
+  return createMacroNutrients(
+    norm.calories * factor,
+    norm.protein_g * factor,
+    norm.carbs_g * factor,
+    norm.fat_g * factor,
   );
 }
 
-/** Look up every AI item in Supabase (in parallel) and seed grams from the AI range midpoint. */
+/**
+ * Sums an array of items or macro records deterministically.
+ */
+export function calculateMealTotals(
+  items: Array<{ per_100g: MacroNutrients | Macros; grams: number } | MacroNutrients | Macros>,
+): MacroNutrients {
+  let cal = 0;
+  let p = 0;
+  let c = 0;
+  let f = 0;
+
+  for (const item of items) {
+    if ("per_100g" in item && "grams" in item) {
+      const m = calculateItemMacros(item.per_100g, item.grams);
+      cal += m.calories;
+      p += m.protein_g;
+      c += m.carbs_g;
+      f += m.fat_g;
+    } else {
+      const m = normalizeMacroNutrients(item);
+      cal += m.calories;
+      p += m.protein_g;
+      c += m.carbs_g;
+      f += m.fat_g;
+    }
+  }
+
+  return createMacroNutrients(cal, p, c, f);
+}
+
+/** Legacy wrapper for calcMacros */
+export function calcMacros(
+  food: { per100g: MacroNutrients | Macros } | null,
+  grams: number,
+): Macros {
+  if (!food || !Number.isFinite(grams) || grams <= 0) {
+    return { calories: 0, protein: 0, carbs: 0, fat: 0, protein_g: 0, carbs_g: 0, fat_g: 0 };
+  }
+  const res = calculateItemMacros(food.per100g, grams);
+  return {
+    calories: res.calories,
+    protein: res.protein_g,
+    carbs: res.carbs_g,
+    fat: res.fat_g,
+    protein_g: res.protein_g,
+    carbs_g: res.carbs_g,
+    fat_g: res.fat_g,
+  };
+}
+
+/** Legacy wrapper for sumMacros */
+export function sumMacros(list: (Macros | MacroNutrients)[]): Macros {
+  const res = calculateMealTotals(list);
+  return {
+    calories: res.calories,
+    protein: res.protein_g,
+    carbs: res.carbs_g,
+    fat: res.fat_g,
+    protein_g: res.protein_g,
+    carbs_g: res.carbs_g,
+    fat_g: res.fat_g,
+  };
+}
+
+/**
+ * Infer item category from Arabic and English naming when category is not set.
+ */
+function inferFoodCategory(item: MealItem): FoodCategory | undefined {
+  if (item.category) return item.category;
+  const name = ((item.display_name_ar || "") + " " + (item.canonical_name || "")).toLowerCase();
+  if (/تميس|صامولي|مفرود|خبز|مطبق|معصوب|عيش|pita|bread|pastry/.test(name)) return "bread_pastry";
+  if (/رز|أرز|بشاور|مضغوط|بخاري|rice/.test(name)) return "rice_grain";
+  if (/تمر|رطب|بلح|dates|fruit/.test(name)) return "fruit_dates";
+  if (/دجاج|لحم|غنم|حاشي|شواية|chicken|meat|beef|lamb/.test(name)) return "meat_poultry";
+  if (/جريش|قرصان|سليق|مرقوق/.test(name)) return "traditional_dish";
+  if (/فول|عدس|حمص|دال|beans|lentil/.test(name)) return "legume";
+  if (/سمبوسة|شاورما|فلافل|برجر|shawarma|burger/.test(name)) return "snack_fastfood";
+  return undefined;
+}
+
+/**
+ * Pure deterministic guardrail enforcing biological & physical limits:
+ * 1. Impossible Macro Sum Check: P + C + F <= 100g per 100g.
+ * 2. Category Protein Ceilings:
+ *    - bread_pastry: clamp protein to max 14g/100g. If portion_assumed && grams > 150, clamp grams to default_portion_g.
+ *    - rice_grain: clamp protein to max 5g/100g.
+ *    - fruit_dates: clamp protein to max 4g/100g.
+ * 3. Atwater Calorie Consistency Check:
+ *    expectedCalories = (P * 4) + (C * 4) + (F * 9).
+ *    If |calories - expectedCalories| / expectedCalories > 20% and diff > 25, reconcile calories = expectedCalories.
+ */
+export function applyPlausibilityChecks(item: MealItem): MealItem {
+  const result: MealItem = {
+    ...item,
+    per_100g: { ...item.per_100g },
+  };
+
+  const warnings: string[] = [];
+  if (result.plausibility_warning) {
+    warnings.push(result.plausibility_warning);
+  }
+
+  const category = inferFoodCategory(result) || result.category;
+  result.category = category;
+
+  let { protein_g, carbs_g, fat_g, calories } = result.per_100g;
+
+  // 1. Impossible Macro Sum Check (per 100g): protein + carbs + fat <= 100g
+  const macroSum = protein_g + carbs_g + fat_g;
+  if (macroSum > 100) {
+    const scale = 100 / macroSum;
+    protein_g = Math.round(protein_g * scale * 10) / 10;
+    carbs_g = Math.round(carbs_g * scale * 10) / 10;
+    fat_g = Math.round(fat_g * scale * 10) / 10;
+    warnings.push("تم ضبط مجموع العناصر الغذائية ليتناسب مع الحد الفيزيائي الأقصى (100جم)");
+  }
+
+  // 2. Category Protein Ceilings (Anti-Hallucination)
+  if (category === "bread_pastry") {
+    if (protein_g > 14) {
+      protein_g = 14;
+      warnings.push("تم ضبط نسبة البروتين للحد الأقصى للمخبوزات (14جم/100جم)");
+    }
+    if (result.portion_assumed && result.grams > 150) {
+      const defPortion = result.default_portion_g || 90;
+      result.grams = defPortion;
+      warnings.push(`تم اعتماد الحصة الافتراضية للمخبوزات (${defPortion}جم) بدلاً من الرغيف الكامل`);
+    }
+  } else if (category === "rice_grain") {
+    if (protein_g > 5) {
+      protein_g = 5;
+      warnings.push("تم ضبط نسبة البروتين للأرز للحد المنطقي (5جم/100جم)");
+    }
+  } else if (category === "fruit_dates") {
+    if (protein_g > 4) {
+      protein_g = 4;
+      warnings.push("تم ضبط نسبة البروتين للتمور والفواكه للحد المنطقي (4جم/100جم)");
+    }
+  }
+
+  // 3. Atwater Calorie Consistency Check
+  const expectedCalories = Math.round(protein_g * 4 + carbs_g * 4 + fat_g * 9);
+  if (expectedCalories > 0) {
+    const diff = Math.abs(calories - expectedCalories);
+    const pctDiff = diff / expectedCalories;
+    if (pctDiff > 0.20 && diff > 25) {
+      calories = expectedCalories;
+      warnings.push("تمت مواءمة السعرات حتمياً وفق معادلة أتووتر (Atwater)");
+    }
+  }
+
+  result.per_100g = createMacroNutrients(calories, protein_g, carbs_g, fat_g);
+  result.plausibility_warning = warnings.length > 0 ? warnings.join(" • ") : null;
+
+  return result;
+}
+
+/** Look up every AI item in Supabase / Curated dataset and seed realistic portions. */
 export async function buildReviewItems(items: ParsedItem[]): Promise<ReviewItem[]> {
   return Promise.all(
     items.map(async (parsed, i) => {
-      const min = Number(parsed.quantity?.grams_min) || 0;
-      const max = Number(parsed.quantity?.grams_max) || 0;
       let food: FoodNutrition | null = null;
       try {
         food = await findFood(parsed);
       } catch (e) {
         console.error("[foods] lookup failed:", e);
       }
+
+      let grams = 0;
+      // 1. If fraction_of_reference is provided (e.g. 0.25, 0.5) and reference unit exists
+      if (
+        parsed.fraction_of_reference != null &&
+        parsed.fraction_of_reference > 0 &&
+        food?.reference_unit_g
+      ) {
+        grams = Math.round(food.reference_unit_g * parsed.fraction_of_reference);
+      } else if (parsed.extracted_grams != null && parsed.extracted_grams > 0) {
+        // 2. Exact user-extracted grams
+        grams = parsed.extracted_grams;
+      } else if (parsed.portion_assumed && food?.default_portion_g) {
+        // 3. Portion was assumed: use default curated portion
+        grams = food.default_portion_g;
+      } else {
+        // 4. Fallback to range midpoint or default portion
+        const min = Number(parsed.quantity?.grams_min) || 0;
+        const max = Number(parsed.quantity?.grams_max) || 0;
+        grams = Math.round((min + max) / 2);
+        if (grams <= 0 && food?.default_portion_g) {
+          grams = food.default_portion_g;
+        }
+      }
+
       return {
         key: `${i}-${parsed.name_en}`,
         parsed,
         food,
-        grams: Math.round((min + max) / 2),
+        grams: Math.max(10, grams),
       };
     }),
   );

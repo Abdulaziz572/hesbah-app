@@ -2,11 +2,16 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
 import { guessMealType, isMealType, saveMealItems, type MealType, type PreviousMeal } from "@/src/lib/meals";
 import type { MealDraft } from "@/src/lib/ai/types";
+import { useAuth } from "@/src/context/AuthContext";
+import { invalidateUserMeals } from "@/src/lib/queryKeys";
 import {
   calcMacros,
   sumMacros,
+  calculateItemMacros,
+  normalizeMacroNutrients,
   type ReviewItem,
 } from "@/src/lib/nutrition";
 import MealTypePicker from "./MealTypePicker";
@@ -29,35 +34,31 @@ export default function ReviewScreen({ draft: draftProp, initialRows = [], templ
   const draft: MealDraft = draftProp ?? ({ items: [] } as unknown as MealDraft);
   const [items, setItems] = useState<MealEditorItem[]>(() =>
     template
-      ? template.meal.items.map((it, i) => ({
-          id: `tpl-${i}-${it.id}`,
-          name: it.name,
-          grams: it.grams,
-          per100g: it.per100g,
-          calories: it.calories,
-          protein: it.protein,
-          carbs: it.carbs,
-          fat: it.fat,
-        }))
+      ? template.meal.items.map((it, i) => {
+          const p100 = normalizeMacroNutrients(it.per100g);
+          const derived = calculateItemMacros(p100, it.grams);
+          return {
+            id: `tpl-${i}-${it.id}`,
+            name: it.name,
+            grams: it.grams,
+            per100g: p100,
+            calories: derived.calories,
+            protein: derived.protein_g,
+            carbs: derived.carbs_g,
+            fat: derived.fat_g,
+          };
+        })
       : initialRows.map((r, i) => {
-      const macros = calcMacros(r.food, r.grams);
-      const factor = (r.grams || 1) / 100;
-      const p100 = r.food?.per100g ?? {
-        calories: Math.round(macros.calories / factor),
-        protein: Math.round((macros.protein / factor) * 10) / 10,
-        carbs: Math.round((macros.carbs / factor) * 10) / 10,
-        fat: Math.round((macros.fat / factor) * 10) / 10,
-      };
+      const p100 = normalizeMacroNutrients(r.food?.per100g);
+      const derived = calculateItemMacros(p100, r.grams);
 
       let badge: MealEditorItem["badge"] = undefined;
       if (!r.food) {
         badge = { type: "unmatched", label: "غير موجود" };
       } else if (r.food.source === "ai") {
         badge = { type: "ai_estimate", label: "تقدير ذكي" };
-      } else if (r.parsed.confidence === "high" && r.parsed.quantity.basis === "user_stated") {
-        badge = { type: "verified", label: "موثّق" };
       } else {
-        badge = { type: "ai_estimate", label: "تقديري" };
+        badge = { type: "curated", label: "تقدير مرجعي" };
       }
 
       return {
@@ -65,12 +66,16 @@ export default function ReviewScreen({ draft: draftProp, initialRows = [], templ
         name: r.parsed.name_ar || r.parsed.name_en || r.food?.name_ar || r.food?.name_en || "صنف",
         grams: r.grams,
         per100g: p100,
-        calories: Math.round(macros.calories),
-        protein: Math.round(macros.protein * 10) / 10,
-        carbs: Math.round(macros.carbs * 10) / 10,
-        fat: Math.round(macros.fat * 10) / 10,
+        calories: derived.calories,
+        protein: derived.protein_g,
+        carbs: derived.carbs_g,
+        fat: derived.fat_g,
         badge,
         originalFoodId: r.food && r.food.source === "db" ? r.food.id : null,
+        reference_unit_g: r.food?.reference_unit_g ?? null,
+        default_portion_g: r.food?.default_portion_g ?? null,
+        portion_assumed: r.parsed.portion_assumed ?? false,
+        category: r.food?.category ?? r.parsed.category,
       };
     }),
   );
@@ -88,6 +93,8 @@ export default function ReviewScreen({ draft: draftProp, initialRows = [], templ
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const router = useRouter();
+  const { user } = useAuth();
+  const queryClient = useQueryClient();
 
   async function handleSave() {
     setSaving(true);
@@ -108,6 +115,7 @@ export default function ReviewScreen({ draft: draftProp, initialRows = [], templ
         { mealType, title, targetDate, customNote: note, isSaved: bookmark },
       );
       setSaved(true);
+      await invalidateUserMeals(queryClient, user?.id ?? "");
       router.push("/");
     } catch (e: unknown) {
       console.error(e);

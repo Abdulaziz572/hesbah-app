@@ -1,5 +1,15 @@
 import { supabase } from "./supabaseClient";
-import { calcMacros, sumMacros, type Macros, type ReviewItem } from "./nutrition";
+import {
+  calcMacros,
+  sumMacros,
+  calculateItemMacros,
+  calculateMealTotals,
+  normalizeMacroNutrients,
+  createMacroNutrients,
+  type Macros,
+  type MacroNutrients,
+  type ReviewItem,
+} from "./nutrition";
 import { eachDay, endOfDay, isSameDay, localDateString, startOfDay } from "./dates";
 
 export { localDateString };
@@ -170,7 +180,7 @@ function eatenAtFor(targetDate: Date | undefined, now: Date): Date {
 export interface MealItemToSave {
   name: string;
   grams: number;
-  per100g: Macros;
+  per100g: Macros | MacroNutrients;
   calories: number;
   protein: number;
   carbs: number;
@@ -248,20 +258,29 @@ export async function saveMealItems(
     writeLocalExtras(user.id, map);
   }
 
-  const items = itemsToSave.map((it) => ({
-    meal_id: meal.id,
-    food_id: it.food_id && UUID_RE.test(it.food_id) ? it.food_id : null,
-    grams: it.grams,
-    quality: it.quality || "user_edit",
-    per_100g_snapshot: it.per100g,
-    nutrients: {
-      calories: it.calories,
-      protein: it.protein,
-      carbs: it.carbs,
-      fat: it.fat,
-      name_ar: it.name,
-    },
-  }));
+  const items = itemsToSave.map((it) => {
+    const normPer100g = normalizeMacroNutrients(it.per100g);
+    const derived = calculateItemMacros(normPer100g, it.grams);
+    const cal = it.calories != null && Number.isFinite(it.calories) ? Math.round(it.calories) : derived.calories;
+    const prot = it.protein != null && Number.isFinite(it.protein) ? Math.round(it.protein * 10) / 10 : derived.protein_g;
+    const carbs = it.carbs != null && Number.isFinite(it.carbs) ? Math.round(it.carbs * 10) / 10 : derived.carbs_g;
+    const fat = it.fat != null && Number.isFinite(it.fat) ? Math.round(it.fat * 10) / 10 : derived.fat_g;
+
+    return {
+      meal_id: meal.id,
+      food_id: it.food_id && UUID_RE.test(it.food_id) ? it.food_id : null,
+      grams: it.grams,
+      quality: it.quality || "user_edit",
+      per_100g_snapshot: normPer100g,
+      nutrients: {
+        calories: cal,
+        protein: prot,
+        carbs,
+        fat,
+        name_ar: it.name,
+      },
+    };
+  });
 
   if (items.length) {
     const { error: itemsErr } = await supabase.from("meal_items").insert(items);
@@ -352,10 +371,14 @@ const toDate = (d: Date | string): Date => {
  * Uses the `local_date` column, which is stamped with the device's local calendar day when the
  * meal is saved, so day boundaries stay correct regardless of UTC offsets.
  */
-async function queryMeals(startDate: Date, endDate: Date): Promise<DiaryMeal[]> {
-  const { data: { user }, error: authErr } = await supabase.auth.getUser();
-  if (authErr || !user) {
-    return [];
+async function queryMeals(startDate: Date, endDate: Date, explicitUserId?: string): Promise<DiaryMeal[]> {
+  let userId = explicitUserId;
+  if (!userId) {
+    const { data: { user }, error: authErr } = await supabase.auth.getUser();
+    if (authErr || !user) {
+      return [];
+    }
+    userId = user.id;
   }
 
   const baseCols =
@@ -364,7 +387,7 @@ async function queryMeals(startDate: Date, endDate: Date): Promise<DiaryMeal[]> 
     supabase
       .from("meals")
       .select(cols)
-      .eq("user_id", user.id)
+      .eq("user_id", userId)
       .gte("local_date", localDateString(startOfDay(startDate)))
       .lte("local_date", localDateString(endOfDay(endDate)))
       .order("eaten_at", { ascending: true });
@@ -380,52 +403,53 @@ async function queryMeals(startDate: Date, endDate: Date): Promise<DiaryMeal[]> 
   const { data, error } = res;
   if (error) throw error;
 
-  const localExtras = readLocalExtras(user.id);
+  const localExtras = readLocalExtras(userId);
 
   return ((data ?? []) as unknown as MealRow[]).map((m) => {
     const items = (m.meal_items ?? []).map((it) => {
       const grams = num(it.grams);
-      const snap = it.per_100g_snapshot;
-      const snapCal = num(snap?.calories);
-      const snapProt = num(snap?.protein);
-      const snapCarbs = num(snap?.carbs);
-      const snapFat = num(snap?.fat);
-      const f = grams / 100;
+      const snapNorm = normalizeMacroNutrients(it.per_100g_snapshot);
+      const nutNorm = normalizeMacroNutrients(it.nutrients);
 
-      const kcal =
-        it.nutrients?.calories != null
-          ? num(it.nutrients.calories)
-          : Math.round(snapCal * f);
-      const prot =
-        it.nutrients?.protein != null
-          ? num(it.nutrients.protein)
-          : Math.round(snapProt * f * 10) / 10;
-      const carbs =
-        it.nutrients?.carbs != null
-          ? num(it.nutrients.carbs)
-          : Math.round(snapCarbs * f * 10) / 10;
-      const fat =
-        it.nutrients?.fat != null
-          ? num(it.nutrients.fat)
-          : Math.round(snapFat * f * 10) / 10;
+      // Backward compatibility recovery:
+      // If per_100g_snapshot was empty or zero in legacy DB rows, but nutrients has positive calories:
+      if (snapNorm.calories === 0 && nutNorm.calories > 0 && grams > 0) {
+        const factor = 100 / grams;
+        snapNorm.calories = Math.round(nutNorm.calories * factor);
+        snapNorm.protein_g = Math.round(nutNorm.protein_g * factor * 10) / 10;
+        snapNorm.carbs_g = Math.round(nutNorm.carbs_g * factor * 10) / 10;
+        snapNorm.fat_g = Math.round(nutNorm.fat_g * factor * 10) / 10;
+      }
+
+      // If nutrients was explicitly stored with positive calories, preserve it; otherwise derive deterministically
+      const itemMacros = nutNorm.calories > 0 ? nutNorm : calculateItemMacros(snapNorm, grams);
 
       return {
         id: it.id,
         name: it.nutrients?.name_ar || it.foods?.name_ar || it.nutrients?.name_en || it.foods?.name_en || "عنصر",
         grams,
-        calories: kcal,
-        protein: prot,
-        carbs,
-        fat,
+        calories: itemMacros.calories,
+        protein: itemMacros.protein_g,
+        carbs: itemMacros.carbs_g,
+        fat: itemMacros.fat_g,
         per100g: {
-          calories: snapCal,
-          protein: snapProt,
-          carbs: snapCarbs,
-          fat: snapFat,
+          calories: snapNorm.calories,
+          protein: snapNorm.protein_g,
+          carbs: snapNorm.carbs_g,
+          fat: snapNorm.fat_g,
+          protein_g: snapNorm.protein_g,
+          carbs_g: snapNorm.carbs_g,
+          fat_g: snapNorm.fat_g,
         },
       };
     });
     const local = localExtras[mealSignature(m.meal_title_ar, items)];
+    const totalsNorm = normalizeMacroNutrients(m.totals);
+    const finalTotals =
+      totalsNorm.calories > 0
+        ? totalsNorm
+        : calculateMealTotals(items.map((it) => ({ per_100g: it.per100g, grams: it.grams })));
+
     return {
       id: m.id,
       localDate: m.local_date,
@@ -433,10 +457,10 @@ async function queryMeals(startDate: Date, endDate: Date): Promise<DiaryMeal[]> 
       mealType: m.meal_type,
       title: m.meal_title_ar,
       totals: {
-        calories: num(m.totals?.calories),
-        protein: num(m.totals?.protein),
-        carbs: num(m.totals?.carbs),
-        fat: num(m.totals?.fat),
+        calories: finalTotals.calories,
+        protein: finalTotals.protein_g,
+        carbs: finalTotals.carbs_g,
+        fat: finalTotals.fat_g,
       },
       items,
       customNote: cleanNote(m.custom_note) ?? local?.note ?? null,
@@ -460,10 +484,10 @@ export interface PreviousMeal {
  * Previous meals without any AI call: the last ~6 months of history, deduplicated by
  * title + foods + grams. Bookmarked meals come first, then the most recent.
  */
-export async function fetchPreviousMeals(days = 180, limit = 60): Promise<PreviousMeal[]> {
+export async function fetchPreviousMeals(days = 180, limit = 60, userId?: string): Promise<PreviousMeal[]> {
   const end = new Date();
   const start = addDaysLocal(end, -days);
-  const all = await queryMeals(start, end);
+  const all = await queryMeals(start, end, userId);
   const groups = new Map<string, PreviousMeal>();
   for (const m of all) {
     if (m.items.length === 0) continue;
@@ -526,14 +550,14 @@ export async function copyMealToDate(meal: DiaryMeal, targetDate: Date = new Dat
 }
 
 /** All meals of one local day (defaults to today). Accepts a Date or a YYYY-MM-DD key. */
-export async function fetchMealsForDay(date: Date | string = new Date()): Promise<DiaryMeal[]> {
+export async function fetchMealsForDay(date: Date | string = new Date(), userId?: string): Promise<DiaryMeal[]> {
   const d = toDate(date);
-  return queryMeals(d, d);
+  return queryMeals(d, d, userId);
 }
 
 /** All meals (with items) of the signed-in user between two local days, inclusive. */
-export async function fetchMealsForDateRange(startDate: Date, endDate: Date): Promise<DiaryMeal[]> {
-  return queryMeals(startDate, endDate);
+export async function fetchMealsForDateRange(startDate: Date, endDate: Date, userId?: string): Promise<DiaryMeal[]> {
+  return queryMeals(startDate, endDate, userId);
 }
 
 export interface DaySummary extends Macros {
@@ -548,19 +572,24 @@ export interface DaySummary extends Macros {
 export async function fetchDaySummaries(
   startDate: Date,
   endDate: Date,
+  explicitUserId?: string,
 ): Promise<Record<string, DaySummary>> {
   const result: Record<string, DaySummary> = {};
   for (const d of eachDay(startDate, endDate)) {
     result[localDateString(d)] = { calories: 0, protein: 0, carbs: 0, fat: 0, count: 0 };
   }
 
-  const { data: { user }, error: authErr } = await supabase.auth.getUser();
-  if (authErr || !user) return result;
+  let userId = explicitUserId;
+  if (!userId) {
+    const { data: { user }, error: authErr } = await supabase.auth.getUser();
+    if (authErr || !user) return result;
+    userId = user.id;
+  }
 
   const { data, error } = await supabase
     .from("meals")
     .select("local_date, totals")
-    .eq("user_id", user.id)
+    .eq("user_id", userId)
     .gte("local_date", localDateString(startOfDay(startDate)))
     .lte("local_date", localDateString(endOfDay(endDate)));
   if (error) throw error;
@@ -598,7 +627,7 @@ export interface UpdateMealItemInput {
   id?: string;
   name: string;
   grams: number;
-  per100g: Macros;
+  per100g: Macros | MacroNutrients;
   calories?: number;
   protein?: number;
   carbs?: number;
@@ -660,21 +689,21 @@ export async function updateMeal(mealId: string, updatedData: UpdateMealData): P
       meal_id: string;
       grams: number;
       quality: string;
-      per_100g_snapshot: Macros;
+      per_100g_snapshot: Macros | MacroNutrients;
       nutrients: Macros & { name_ar: string };
     }[] = [];
     const itemMacrosList: Macros[] = [];
 
     for (const itemInput of updatedData.items) {
       const grams = Math.max(0, Math.min(5000, num(itemInput.grams)));
-      const snap = itemInput.per100g ?? { calories: 0, protein: 0, carbs: 0, fat: 0 };
-      const f = grams / 100;
-      const cal = itemInput.calories != null ? num(itemInput.calories) : Math.round(num(snap.calories) * f);
-      const prot = itemInput.protein != null ? num(itemInput.protein) : Math.round(num(snap.protein) * f * 10) / 10;
-      const carbs = itemInput.carbs != null ? num(itemInput.carbs) : Math.round(num(snap.carbs) * f * 10) / 10;
-      const fat = itemInput.fat != null ? num(itemInput.fat) : Math.round(num(snap.fat) * f * 10) / 10;
+      const snap = normalizeMacroNutrients(itemInput.per100g);
+      const derived = calculateItemMacros(snap, grams);
+      const cal = itemInput.calories != null && Number.isFinite(itemInput.calories) ? Math.round(num(itemInput.calories)) : derived.calories;
+      const prot = itemInput.protein != null && Number.isFinite(itemInput.protein) ? Math.round(num(itemInput.protein) * 10) / 10 : derived.protein_g;
+      const carbs = itemInput.carbs != null && Number.isFinite(itemInput.carbs) ? Math.round(num(itemInput.carbs) * 10) / 10 : derived.carbs_g;
+      const fat = itemInput.fat != null && Number.isFinite(itemInput.fat) ? Math.round(num(itemInput.fat) * 10) / 10 : derived.fat_g;
 
-      const macroItem: Macros = { calories: cal, protein: prot, carbs, fat };
+      const macroItem: Macros = { calories: cal, protein: prot, carbs, fat, protein_g: prot, carbs_g: carbs, fat_g: fat };
       itemMacrosList.push(macroItem);
 
       if (itemInput.id && stored.has(itemInput.id)) {

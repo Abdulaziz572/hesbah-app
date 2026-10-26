@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { MealInput, MediaPayload } from "@/src/lib/ai/types";
 import { compressImage, toDataUrl } from "@/src/lib/media";
 import {
@@ -10,6 +11,8 @@ import {
   useAudioRecorder,
 } from "@/src/lib/useAudioRecorder";
 import { MEAL_TYPES, copyMealToDate, fetchPreviousMeals, type PreviousMeal } from "@/src/lib/meals";
+import { useAuth } from "@/src/context/AuthContext";
+import { queryKeys, invalidateUserMeals } from "@/src/lib/queryKeys";
 import PreviousMealsSheet, { mealDisplayName } from "./PreviousMealsSheet";
 
 const EXAMPLE = "أكلت نص حبة دجاج شواية مع صحن رز بخاري صغير، وشربت بيبسي دايت";
@@ -38,6 +41,10 @@ const RECORDER_ERRORS: Record<string, string> = {
 
 export default function DescribeScreen({ onAnalyze, loading, error, targetDate, onEditPrevious }: Props) {
   const router = useRouter();
+  const { user } = useAuth();
+  const userId = user?.id ?? "";
+  const queryClient = useQueryClient();
+
   const [text, setText] = useState("");
   const [image, setImage] = useState<MediaPayload | null>(null);
   const [audio, setAudio] = useState<{ payload: MediaPayload; secs: number } | null>(null);
@@ -46,31 +53,28 @@ export default function DescribeScreen({ onAnalyze, loading, error, targetDate, 
   const [localError, setLocalError] = useState<string | null>(null);
 
   // Previous meals (no AI): quick strip + bottom sheet
-  const [previous, setPrevious] = useState<PreviousMeal[] | null>(null);
-  const [previousError, setPreviousError] = useState<string | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [sheetFocus, setSheetFocus] = useState<string | null>(null);
   const [quickAddingSig, setQuickAddingSig] = useState<string | null>(null);
 
-  const loadPrevious = useCallback(async () => {
-    setPreviousError(null);
-    try {
-      setPrevious(await fetchPreviousMeals());
-    } catch (e) {
-      console.error(e);
-      setPreviousError("تعذّر تحميل وجباتك السابقة.");
-    }
-  }, []);
+  const {
+    data: previous = null,
+    error: previousQueryErr,
+    refetch: refetchPrevious,
+  } = useQuery({
+    queryKey: queryKeys.previousMeals(userId),
+    queryFn: () => fetchPreviousMeals(180, 60, userId),
+    enabled: !!userId,
+  });
 
-  useEffect(() => {
-    void loadPrevious();
-  }, [loadPrevious]);
+  const previousError = previousQueryErr ? "تعذّر تحميل وجباتك السابقة." : null;
 
   async function quickAdd(p: PreviousMeal) {
     setLocalError(null);
     setQuickAddingSig(p.signature);
     try {
       await copyMealToDate(p.meal, targetDate);
+      await invalidateUserMeals(queryClient, userId);
       router.push("/");
     } catch (e) {
       console.error(e);
@@ -85,7 +89,9 @@ export default function DescribeScreen({ onAnalyze, loading, error, targetDate, 
   }
 
   function updatePrevious(next: PreviousMeal) {
-    setPrevious((list) => (list ? list.map((m) => (m.signature === next.signature ? next : m)) : list));
+    queryClient.setQueryData<PreviousMeal[] | null>(queryKeys.previousMeals(userId), (list) =>
+      list ? list.map((m) => (m.signature === next.signature ? next : m)) : list,
+    );
   }
 
   const { recording, elapsed, start, stop } = useAudioRecorder();
@@ -535,7 +541,7 @@ export default function DescribeScreen({ onAnalyze, loading, error, targetDate, 
           initialOpen={sheetFocus}
           targetDate={targetDate}
           onClose={() => setSheetOpen(false)}
-          onRetry={() => void loadPrevious()}
+          onRetry={() => void refetchPrevious()}
           onUpdate={updatePrevious}
           onEdit={onEditPrevious}
         />

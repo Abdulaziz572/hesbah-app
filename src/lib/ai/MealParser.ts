@@ -8,62 +8,41 @@ import type {
   MealInput,
   MealInputType,
   MediaPayload,
+  ParsedItem,
   ReparsedSingleItem,
   SingleItemInput,
+  FoodCategory,
 } from "./types";
+import { findFood } from "../foodLookup";
+import { applyPlausibilityChecks, calculateItemMacros, createMacroNutrients } from "../nutrition";
 
 const MODEL_NAME = "gemini-3.5-flash-lite";
-const SCHEMA_VERSION = "1.0";
+const SCHEMA_VERSION = "2.0";
 
-const SYSTEM_INSTRUCTION = `You are MealParser, the food-recognition engine of a nutrition tracking app.
+const SYSTEM_INSTRUCTION = `You are MealParser, the extraction-only food recognition engine of a Saudi nutrition tracking app.
 
-ABSOLUTE RULES:
-1. NEVER output calories, kcal, protein, carbohydrates, fat, fiber, sugar, or any other nutrient/macronutrient value anywhere in your output, including warnings and questions, EXCEPT inside each item's ai_estimated_per_100g object (see NUTRITION ESTIMATE RULES). Your main job is to identify foods, their cooking state, and estimate weight ranges in grams.
-2. DECOMPOSE mixed meals into base ingredients (e.g. Kabsa => cooked basmati rice + cooked chicken; do not return a single "Kabsa" item). Put the overall dish label in dish_name.
-3. Output ONLY a JSON object that conforms to the provided schema. No markdown, no code fences, no commentary.
+STRICT ROLE & BOUNDARIES:
+1. EXTRACTION ONLY: You are strictly an ENTITY AND PORTION EXTRACTOR. NEVER compute total dish or meal calories or scaled macros. All final calculations are performed deterministically in application code.
+2. COMPOSITE DISH DECOMPOSITION (Mandatory for Saudi dishes):
+   When a user mentions a composite dish (e.g. "كبسة دجاج", "مندي لحم", "سليق بالدجاج", "مضغوط دجاج", "كبسة حاشي"), you MUST ALWAYS split it into TWO separate items in the items array:
+   - Item 1 (Carbohydrate base): e.g. "أرز كبسة / مضغوط (مطبوخ بدون اللحم)" (category: "rice_grain", cooking_state: "cooked", default 250g).
+   - Item 2 (Cooked protein portion): e.g. "دجاج شواية / مضغوط / مندي / كبسة (صافي اللحم المأكول بدون العظم)" (category: "meat_poultry", cooking_state: "cooked", default 115g boneless edible meat for quarter chicken = 0.25 fraction, 230g for half chicken = 0.5 fraction, or 100g for lamb/camel).
+   NEVER return a single composite dish item like "كبسة دجاج" or "مندي دجاج"! Put the overarching name in dish_name.
+3. ENTITY & PORTION DETAILS:
+   - Provide "name_ar" (clear Arabic food name) and "name_en".
+   - Set "category": bread_pastry, rice_grain, traditional_dish, meat_poultry, legume, snack_fastfood, fruit_dates, dairy_egg, beverage, other.
+   - Set "cooking_state": default to "cooked" or "ready_to_eat" for prepared meals (unless raw was stated).
+   - If user stated grams or count, put in "extracted_grams".
+   - If user specified a portion fraction of a whole unit (e.g. "ربع تميس" or "ربع دجاجة" -> 0.25, "نص" -> 0.5, "كامل / حبة" -> 1.0), set "fraction_of_reference".
+   - Set "portion_assumed": true whenever the user did not specify an exact weight, count, or fraction (e.g. "أكلت تميس", "أكلت صحن كبسة"). Set false when stated.
+4. AI FALLBACK NUTRITION (Strictly per 100g cooked/ready-to-eat):
+   - Fill "ai_fallback_per_100g" (and "ai_estimated_per_100g") with kcal, protein_g, carbs_g, fat_g per 100g as described.
+   - Adhere to realistic biological limits (bread has ~8-11g protein/100g, cooked rice has ~2.5-3g protein/100g, dates have ~2g protein/100g). NEVER estimate 30g+ protein for breads!
+5. OUTPUT:
+   - Output ONLY a JSON object conforming to the schema. No markdown fences, no conversational commentary.
 
 CONTEXT:
-- Users are mostly in Saudi Arabia and the Gulf. Expect dishes such as Kabsa, Mandi, Mathbi, Madfoon, Jareesh, Saleeg, Harees, Mutabbaq, Kebdah, Shawarma, Foul, Falafel, Hummus, Samboosa, Fattah, Aseedah, dates and Arabic coffee. Understand Gulf/Saudi Arabic dialect (e.g. "نص حبة دجاج" = half a whole chicken, "صحن رز" = a plate of rice, "بيبسي دايت" = Diet Pepsi, zero-sugar drink).
-- Provide both name_en and name_ar for every food. Set "language" to the language the user used.
-
-QUANTITY RULES:
-- Estimate each item's edible weight as a range in grams (grams_min <= grams_max). Never use a single exact guess when unsure; widen the range.
-- quantity.basis: "user_stated" if the user gave the amount (convert units/portions to grams sensibly, excluding bones/inedible parts when reasonable), "visual_guess" if estimated from a photo, "unknown" if it cannot be estimated (use 0 and 0 and ask a clarifying question).
-- cooking_state must be raw, cooked, dry, or unknown. Rice, meat and pasta are usually "cooked" in prepared meals.
-- Zero-calorie drinks (e.g. diet sodas, water) are still listed as items with a volume-based gram estimate (1 ml ~ 1 g).
-
-NUTRITION ESTIMATE RULES:
-- For EVERY item, ALWAYS fill ai_estimated_per_100g with kcal, protein_g, carbs_g and fat_g per 100 g of the food AS DESCRIBED (respect cooking_state: cooked rice differs from dry rice), using your general nutrition knowledge (e.g. USDA / standard food-composition tables).
-- Be as accurate as possible even for common foods; never leave values as 0 unless the food truly has none (e.g. diet soda, water). Do not guess wildly: use typical values for the specific preparation (grilled, fried, etc.).
-- These numbers are ONLY allowed inside ai_estimated_per_100g. Never mention nutrients in warnings, questions, or any other field.
-
-HIDDEN ITEMS:
-- ALWAYS consider and flag hidden items in possible_hidden_items: cooking oil, ghee/samn, butter, sauces (tomato, daqoos, tahini, mayo, garlic sauce), added sugar, fried onions, nuts/raisins in rice. Give a short reason for each.
-- Only list an item in "items" with visible=true if it is seen or stated; use visible=false for inferred ingredients.
-
-AUDIO INPUT (voice recordings):
-- The user may attach an audio recording of themselves describing a meal. Listen to it carefully and treat it exactly like a typed description.
-- Accurately understand Arabic, including Saudi/Gulf/Najdi/Hijazi dialect food terms, colloquial quantities ("نص", "ربع", "حبتين", "صحن", "كاسة", "معلقة", "كفّ") and brand/product names (e.g. Al Baik/البيك, Kudu/كودو, Almarai/المراعي, Pepsi/بيبسي, Nadec, Saudia). Ignore filler words, hesitations and background noise.
-- If the audio is silent, unintelligible, or contains no food, return an empty items array, add a global warning (e.g. the recording was unclear) and set needs_clarification to true.
-
-IMAGE INPUT (photos):
-- The user may attach a photo (camera, gallery, screenshot or pasted picture). Identify every visible food and drink, including cooked dishes, packaged products and drinks.
-- Visually estimate each item's portion in grams from plate/bowl/container proportions, utensils, hands, cups and packaging for scale. Use quantity.basis = "visual_guess" and keep ranges honest (widen them when the angle, lighting or scale is poor).
-- Identify cooked dishes and decompose them into base ingredients (see rule 2). Note cooking method when visible (grilled, fried, baked).
-- If the photo shows a nutrition facts label or packaged-product label, read the printed values carefully: use the printed serving size/weight for the quantity (basis "user_stated" when the label states it) and copy the printed per-100g (or per-serving converted to per-100g) values into ai_estimated_per_100g for that item. Use the brand/product name on the package.
-- If the photo is blurry, dark or does not show food, add a global warning and set needs_clarification to true.
-
-COMBINED INPUT:
-- Text, audio and image may be combined. The user's note or speech takes priority over visual guesses when it states a quantity or correction (e.g. "أكلت نص هذا الصحن فقط" = only half of the plate shown; scale your gram estimate of the photographed portion accordingly and use basis "user_stated" when appropriate).
-
-DESCRIPTION FIELD:
-- Whenever the input includes audio and/or an image, ALWAYS fill transcribed_or_detected_description_ar with one short, natural Arabic sentence (or two) summarizing what you heard (for voice, a faithful cleaned-up transcription/summary) and/or what you saw (for photos). Never put nutrient values in it. For text-only input you may leave it as an empty string.
-
-CONFIDENCE & CLARIFICATION:
-- Set confidence per item (high/medium/low). Use needs_user_confirmation (list of field names such as "quantity", "cooking_state", "name") when the user should confirm.
-- Add clarifying_questions (field, question_en, question_ar) for important ambiguities, and set needs_clarification true if any exist or any item has low confidence.
-- Use global_warnings for meal-level issues (e.g. blurry photo, unclear portion size, unclear audio). Empty arrays are allowed.
-- If the input is not food, return an empty items array, a global warning, and needs_clarification true.
+- Saudi/Gulf dialect: "نص حبة دجاج" = half whole chicken (edible cooked meat ~230g), "ربع دجاجة" = quarter chicken (~115g edible), "صحن رز" = plate of rice (~250g), "تميس" = tamees flatbread (default portion ~90g quarter loaf, whole loaf ~360g), "صامولي" = roll (~60g), "حبتين سمبوسة" = 2 sambusas (~80g), "3 تمرات" = 3 dates (~30g).
 - schema_version must be "${SCHEMA_VERSION}".`;
 
 const stringArray = {
@@ -100,6 +79,23 @@ const MEAL_DRAFT_SCHEMA: ResponseSchema = {
         properties: {
           name_en: { type: SchemaType.STRING },
           name_ar: { type: SchemaType.STRING },
+          canonical_name: { type: SchemaType.STRING },
+          category: {
+            type: SchemaType.STRING,
+            format: "enum",
+            enum: [
+              "bread_pastry",
+              "rice_grain",
+              "traditional_dish",
+              "meat_poultry",
+              "legume",
+              "snack_fastfood",
+              "fruit_dates",
+              "dairy_egg",
+              "beverage",
+              "other",
+            ],
+          },
           cooking_state: {
             type: SchemaType.STRING,
             format: "enum",
@@ -124,6 +120,19 @@ const MEAL_DRAFT_SCHEMA: ResponseSchema = {
             },
             required: ["grams_min", "grams_max", "basis"],
           },
+          extracted_grams: { type: SchemaType.NUMBER },
+          fraction_of_reference: { type: SchemaType.NUMBER },
+          portion_assumed: { type: SchemaType.BOOLEAN },
+          ai_fallback_per_100g: {
+            type: SchemaType.OBJECT,
+            properties: {
+              kcal: { type: SchemaType.NUMBER },
+              protein_g: { type: SchemaType.NUMBER },
+              carbs_g: { type: SchemaType.NUMBER },
+              fat_g: { type: SchemaType.NUMBER },
+            },
+            required: ["kcal", "protein_g", "carbs_g", "fat_g"],
+          },
           ai_estimated_per_100g: {
             type: SchemaType.OBJECT,
             properties: {
@@ -144,6 +153,7 @@ const MEAL_DRAFT_SCHEMA: ResponseSchema = {
           "confidence",
           "visible",
           "quantity",
+          "portion_assumed",
           "ai_estimated_per_100g",
           "needs_user_confirmation",
           "warnings",
@@ -190,29 +200,46 @@ const MEAL_DRAFT_SCHEMA: ResponseSchema = {
   ],
 };
 
-const SINGLE_ITEM_INSTRUCTION = `You are an expert food and nutrition analyzer for an Arabic nutrition tracking application.
-You are given a single food item (which may have an existing name, weight, and nutrients) and a correction or description prompt from the user in Arabic (e.g. "لا هذا فخذ دجاج مقلي مو صدور", "مطبوخ مع ملعقة سمن", "خلها 3 حبات سمبوسة لحم بالفرن", or a brand new item description).
+const SINGLE_ITEM_INSTRUCTION = `You are an expert food extractor for an Arabic nutrition tracking application.
+You are given a single food item description or correction in Arabic.
 
 RULES:
-1. Identify the exact food item and its preparation/cooking state (e.g., grilled, fried, boiled, baked, raw, cooked).
-2. Set accurate "name_ar" (clear Arabic food name) and "name_en".
-3. Estimate the portion in grams ("grams"):
-   - If the user explicitly stated a new quantity (e.g. "3 حبات", "صحن كبير", "150 جرام"), calculate the grams accordingly.
-   - If the user only corrected the cooking method or ingredient type without specifying quantity, keep or sensibly adapt the current item's grams.
-   - For a new item without quantity specified, use a standard typical serving weight in grams (e.g. 1 apple ~ 150g, 1 cup ~ 240g).
-4. Fill "ai_estimated_per_100g" with accurate nutritional values per 100g:
-   - "kcal": calories per 100g
-   - "protein_g": protein in grams per 100g
-   - "carbs_g": carbohydrates in grams per 100g
-   - "fat_g": fat in grams per 100g
-5. Output ONLY a valid JSON object matching the schema. No markdown, no commentary.`;
+1. Identify the food item: set clear "name_ar", "name_en", and "category" (bread_pastry, rice_grain, traditional_dish, meat_poultry, legume, snack_fastfood, fruit_dates, dairy_egg, beverage, other).
+2. Set "cooking_state" (cooked, raw, ready_to_eat, dry).
+3. Estimate realistic portion in grams ("grams"):
+   - If user stated count or grams, calculate accurately.
+   - For bread/Tamees: default quarter loaf is 90g (whole is 360g).
+   - If user gave fraction ("ربع" = 0.25, "نص" = 0.5, "كامل" = 1.0), set "fraction_of_reference".
+4. Fill "ai_estimated_per_100g" with realistic per-100g values:
+   - For breads: protein is ~8-11g/100g max 14g.
+   - For rice: protein is ~2.5-3.5g/100g.
+   - For poultry: protein is ~25-28g/100g.
+5. Output ONLY valid JSON matching the schema.`;
 
 const SINGLE_ITEM_SCHEMA: ResponseSchema = {
   type: SchemaType.OBJECT,
   properties: {
     name_ar: { type: SchemaType.STRING },
     name_en: { type: SchemaType.STRING },
+    category: {
+      type: SchemaType.STRING,
+      format: "enum",
+      enum: [
+        "bread_pastry",
+        "rice_grain",
+        "traditional_dish",
+        "meat_poultry",
+        "legume",
+        "snack_fastfood",
+        "fruit_dates",
+        "dairy_egg",
+        "beverage",
+        "other",
+      ],
+    },
     grams: { type: SchemaType.NUMBER },
+    fraction_of_reference: { type: SchemaType.NUMBER },
+    portion_assumed: { type: SchemaType.BOOLEAN },
     cooking_state: {
       type: SchemaType.STRING,
       format: "enum",
@@ -251,6 +278,126 @@ export class MealParser {
     });
   }
 
+  /**
+   * Deterministic post-processor enforcing composite dish decomposition
+   * (e.g. Kabsa => Kabsa Rice + Cooked Chicken)
+   */
+  public static decomposeCompositeDishes(items: ParsedItem[]): ParsedItem[] {
+    const result: ParsedItem[] = [];
+
+    for (const item of items) {
+      const text = ((item.name_ar || "") + " " + (item.name_en || "")).toLowerCase();
+      const isKabsaChicken = /كبسة\s*(دجاج|الدجاج)|دجاج\s*كبسة|chicken\s*kabsa/.test(text);
+      const isMandiChicken = /مندي\s*(دجاج|الدجاج)|دجاج\s*مندي|chicken\s*mandi/.test(text);
+      const isMadghootChicken = /مضغوط\s*(دجاج|الدجاج)|دجاج\s*مضغوط|chicken\s*madghoot/.test(text);
+      const isSaleegChicken = /سليق\s*(دجاج|الدجاج|بالدجاج)|chicken\s*saleeg/.test(text);
+      const isKabsaMeat = /كبسة\s*(لحم|اللحم|حاشي|غنم)|lamb\s*kabsa|meat\s*kabsa/.test(text);
+      const isMandiMeat = /مندي\s*(لحم|اللحم|حاشي|غنم)|lamb\s*mandi|meat\s*mandi/.test(text);
+
+      if (isKabsaChicken || isMandiChicken || isMadghootChicken || isSaleegChicken) {
+        // Extract fraction: default quarter chicken = 115g edible meat unless user explicitly specified half or whole
+        let frac = item.fraction_of_reference;
+        if (frac == null) {
+          if (/نص|نصف|half/i.test(text)) {
+            frac = 0.5;
+          } else if (/كامل|حبة كاملة|whole/i.test(text)) {
+            frac = 1.0;
+          } else {
+            frac = 0.25; // Default: quarter chicken (115g edible meat)
+          }
+        }
+        const chickenGrams = Math.round(460 * frac);
+        const riceGrams = 250;
+
+        const carbNameAr = isSaleegChicken
+          ? "سليق (أرز بالحليب بدون الدجاج)"
+          : isMandiChicken
+          ? "أرز بخاري / مندي (مطبوخ)"
+          : "أرز كبسة / مضغوط (مطبوخ بدون اللحم)";
+        const carbNameEn = isSaleegChicken ? "Saleeg Rice" : "Cooked Kabsa / Mandi Rice";
+
+        // 1. Carbohydrate Base Item
+        result.push({
+          name_ar: carbNameAr,
+          name_en: carbNameEn,
+          canonical_name: carbNameEn,
+          category: "rice_grain",
+          cooking_state: "cooked",
+          confidence: item.confidence,
+          visible: item.visible,
+          quantity: { grams_min: 200, grams_max: 300, basis: "user_stated" },
+          extracted_grams: riceGrams,
+          portion_assumed: item.portion_assumed ?? true,
+          ai_fallback_per_100g: { kcal: 155, protein_g: 3, carbs_g: 30, fat_g: 2.5 },
+          ai_estimated_per_100g: { kcal: 155, protein_g: 3, carbs_g: 30, fat_g: 2.5 },
+          needs_user_confirmation: [],
+          warnings: [],
+        });
+
+        // 2. Cooked Chicken Meat Item
+        result.push({
+          name_ar: "دجاج شواية / مضغوط / مندي / كبسة (صافي اللحم المأكول بدون العظم)",
+          name_en: "Cooked Chicken Meat (Boneless / Edible)",
+          canonical_name: "Cooked Chicken Meat (Boneless / Edible)",
+          category: "meat_poultry",
+          cooking_state: "cooked",
+          confidence: item.confidence,
+          visible: item.visible,
+          quantity: { grams_min: chickenGrams - 15, grams_max: chickenGrams + 15, basis: "user_stated" },
+          extracted_grams: chickenGrams,
+          fraction_of_reference: frac,
+          portion_assumed: item.portion_assumed ?? true,
+          ai_fallback_per_100g: { kcal: 215, protein_g: 26, carbs_g: 0, fat_g: 11.5 },
+          ai_estimated_per_100g: { kcal: 215, protein_g: 26, carbs_g: 0, fat_g: 11.5 },
+          needs_user_confirmation: [],
+          warnings: [],
+        });
+      } else if (isKabsaMeat || isMandiMeat) {
+        const meatGrams = 100;
+        const riceGrams = 250;
+        const carbNameAr = isMandiMeat ? "أرز بخاري / مندي (مطبوخ)" : "أرز كبسة / مضغوط (مطبوخ بدون اللحم)";
+
+        result.push({
+          name_ar: carbNameAr,
+          name_en: "Cooked Kabsa / Mandi Rice",
+          canonical_name: "Cooked Kabsa / Mandi Rice",
+          category: "rice_grain",
+          cooking_state: "cooked",
+          confidence: item.confidence,
+          visible: item.visible,
+          quantity: { grams_min: 200, grams_max: 300, basis: "user_stated" },
+          extracted_grams: riceGrams,
+          portion_assumed: item.portion_assumed ?? true,
+          ai_fallback_per_100g: { kcal: 155, protein_g: 3, carbs_g: 30, fat_g: 2.5 },
+          ai_estimated_per_100g: { kcal: 155, protein_g: 3, carbs_g: 30, fat_g: 2.5 },
+          needs_user_confirmation: [],
+          warnings: [],
+        });
+
+        result.push({
+          name_ar: "لحم غنم / حاشي مطبوخ (صافي بدون عظم)",
+          name_en: "Cooked Lamb / Camel Meat (Boneless)",
+          canonical_name: "Cooked Lamb / Camel Meat (Boneless)",
+          category: "meat_poultry",
+          cooking_state: "cooked",
+          confidence: item.confidence,
+          visible: item.visible,
+          quantity: { grams_min: 80, grams_max: 120, basis: "user_stated" },
+          extracted_grams: meatGrams,
+          portion_assumed: item.portion_assumed ?? true,
+          ai_fallback_per_100g: { kcal: 270, protein_g: 25, carbs_g: 0, fat_g: 19 },
+          ai_estimated_per_100g: { kcal: 270, protein_g: 25, carbs_g: 0, fat_g: 19 },
+          needs_user_confirmation: [],
+          warnings: [],
+        });
+      } else {
+        result.push(item);
+      }
+    }
+
+    return result;
+  }
+
   private static parseResponse(raw: string, inputType: MealInputType): MealDraft {
     let parsed: unknown;
     try {
@@ -266,8 +413,11 @@ export class MealParser {
       throw new Error("MealParser: model response does not match MealDraft schema.");
     }
     const draft = parsed as MealDraft;
-    // Input type is known by the caller; don't trust the model for it.
     draft.input_type = inputType;
+
+    // Apply deterministic composite dish decomposition post-processing
+    draft.items = MealParser.decomposeCompositeDishes(draft.items);
+
     return draft;
   }
 
@@ -291,8 +441,7 @@ export class MealParser {
   }
 
   /**
-   * Unified entry point: any combination of text, voice and image. Media is passed
-   * inline to Gemini and never persisted.
+   * Unified entry point: text, voice, and photo extraction.
    */
   static async parseMealInput(input: MealInput): Promise<MealDraft> {
     const text = input.text?.trim() ?? "";
@@ -310,12 +459,12 @@ export class MealParser {
     const instructions: string[] = [`Input type: ${inputType}`];
     if (audio?.base64) {
       instructions.push(
-        "An audio recording of the user describing their meal is attached. Listen to it and extract the foods and quantities.",
+        "An audio recording of the user describing their meal is attached. Listen to it and extract foods and quantities.",
       );
     }
     if (image?.base64) {
       instructions.push(
-        "A photo related to the meal is attached. Identify the foods and visually estimate portions in grams.",
+        "A photo related to the meal is attached. Identify foods and visually estimate portions in grams.",
       );
     }
     if (text) {
@@ -366,8 +515,8 @@ export class MealParser {
   }
 
   /**
-   * Reparse or refine a single food item based on user correction or description.
-   * If currentItem is provided, the model adjusts that item; if null/undefined, it parses a new single item.
+   * Reparse or refine a single food item based on user correction or description,
+   * grounded with database lookup & deterministic plausibility checks.
    */
   static async reparseSingleItem(
     currentItem: SingleItemInput | null | undefined,
@@ -382,22 +531,18 @@ export class MealParser {
     if (currentItem && (currentItem.name || currentItem.name_ar || currentItem.name_en)) {
       lines.push("CURRENT FOOD ITEM DATA:");
       lines.push(`- Name: ${currentItem.name_ar || currentItem.name || currentItem.name_en}`);
+      if (currentItem.category) lines.push(`- Category: ${currentItem.category}`);
       if (currentItem.grams) lines.push(`- Current Weight: ${currentItem.grams}g`);
       if (currentItem.calories != null) lines.push(`- Current Calories: ${currentItem.calories} kcal`);
-      if (currentItem.per100g) {
-        lines.push(
-          `- Current Per 100g: ${currentItem.per100g.calories} kcal, ${currentItem.per100g.protein}g protein, ${currentItem.per100g.carbs}g carbs, ${currentItem.per100g.fat}g fat`,
-        );
-      }
       lines.push("");
       lines.push(`USER CORRECTION NOTE:\n"${prompt}"`);
       lines.push(
-        "Apply the user's correction to this item, re-estimating portions and per-100g nutritional facts accordingly.",
+        "Apply the user's correction to this item, re-extracting portion and realistic per-100g nutritional facts.",
       );
     } else {
       lines.push(`NEW FOOD ITEM TO ANALYZE:\n"${prompt}"`);
       lines.push(
-        "Extract this single food item, estimate realistic portion in grams, and calculate nutritional values per 100g.",
+        "Extract this single food item, category, realistic portion in grams, and nutritional values per 100g.",
       );
     }
 
@@ -410,35 +555,73 @@ export class MealParser {
       throw new Error("MealParser: model returned invalid JSON for single item.");
     }
 
-    const fallbackGrams = Math.max(1, Math.round(Number(currentItem?.grams) || 100));
-    const grams = Math.max(1, Math.min(5000, Math.round(Number(parsed.grams) || fallbackGrams)));
+    const name_ar = String(parsed.name_ar || currentItem?.name_ar || currentItem?.name || "صنف غذائي");
+    const name_en = String(parsed.name_en || currentItem?.name_en || "Food item");
+    const category: FoodCategory | undefined = parsed.category || currentItem?.category;
 
+    // 1. Check database and curated reference fallback first
+    let dbFood = null;
+    try {
+      dbFood = await findFood({ name_ar, name_en, category });
+    } catch (e) {
+      console.warn("[MealParser] lookup for single item failed:", e);
+    }
+
+    let grams = Math.max(1, Math.min(5000, Math.round(Number(parsed.grams) || Number(currentItem?.grams) || 100)));
+    if (parsed.fraction_of_reference && dbFood?.reference_unit_g) {
+      grams = Math.round(dbFood.reference_unit_g * parsed.fraction_of_reference);
+    } else if (parsed.portion_assumed && dbFood?.default_portion_g) {
+      grams = dbFood.default_portion_g;
+    }
+
+    // Per 100g base: prioritize curated DB values, otherwise use AI estimate
     const est = parsed.ai_estimated_per_100g || {};
-    const p100 = {
+    const rawP100 = dbFood?.per100g ?? {
       calories: Math.max(0, Math.round(Number(est.kcal) || 0)),
-      protein: Math.max(0, Math.round((Number(est.protein_g) || 0) * 10) / 10),
-      carbs: Math.max(0, Math.round((Number(est.carbs_g) || 0) * 10) / 10),
-      fat: Math.max(0, Math.round((Number(est.fat_g) || 0) * 10) / 10),
+      protein_g: Math.max(0, Math.round((Number(est.protein_g) || 0) * 10) / 10),
+      carbs_g: Math.max(0, Math.round((Number(est.carbs_g) || 0) * 10) / 10),
+      fat_g: Math.max(0, Math.round((Number(est.fat_g) || 0) * 10) / 10),
     };
 
-    const factor = grams / 100;
-    const calories = Math.round(p100.calories * factor);
-    const protein = Math.round(p100.protein * factor * 10) / 10;
-    const carbs = Math.round(p100.carbs * factor * 10) / 10;
-    const fat = Math.round(p100.fat * factor * 10) / 10;
+    // 2. Apply deterministic plausibility checks
+    const plausibleItem = applyPlausibilityChecks({
+      id: "single-temp",
+      canonical_name: name_en,
+      display_name_ar: name_ar,
+      grams,
+      state: "ready_to_eat",
+      category: dbFood?.category || category,
+      per_100g: createMacroNutrients(rawP100.calories, rawP100.protein_g, rawP100.carbs_g, rawP100.fat_g),
+      source: dbFood ? "db_match" : "ai_estimate",
+      confidence: "high",
+      portion_assumed: !!parsed.portion_assumed,
+      default_portion_g: dbFood?.default_portion_g,
+      reference_unit_g: dbFood?.reference_unit_g,
+    });
+
+    const finalGrams = plausibleItem.grams;
+    const derived = calculateItemMacros(plausibleItem.per_100g, finalGrams);
 
     return {
-      name_ar: String(parsed.name_ar || currentItem?.name_ar || currentItem?.name || "صنف غذائي"),
-      name_en: String(parsed.name_en || currentItem?.name_en || "Food item"),
-      grams,
-      per100g: p100,
-      calories,
-      protein,
-      carbs,
-      fat,
+      name_ar,
+      name_en,
+      category: plausibleItem.category,
+      grams: finalGrams,
+      per100g: {
+        calories: plausibleItem.per_100g.calories,
+        protein: plausibleItem.per_100g.protein_g,
+        carbs: plausibleItem.per_100g.carbs_g,
+        fat: plausibleItem.per_100g.fat_g,
+      },
+      calories: derived.calories,
+      protein: derived.protein_g,
+      carbs: derived.carbs_g,
+      fat: derived.fat_g,
       cooking_state: parsed.cooking_state,
+      reference_unit_g: dbFood?.reference_unit_g,
+      portion_assumed: plausibleItem.portion_assumed,
+      plausibility_warning: plausibleItem.plausibility_warning,
       notes: parsed.notes,
     };
   }
 }
-

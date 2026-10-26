@@ -72,3 +72,10 @@ alter table public.meals add column if not exists is_saved boolean not null defa
 create index if not exists meals_user_saved_idx
   on public.meals (user_id)
   where is_saved;
+
+-- Fast date range queries and daily lookups per user (eliminates sequential table scans)
+create index if not exists meals_user_local_date_idx
+  on public.meals (user_id, local_date);
+
+create index if not exists meals_user_id_idx
+  on public.meals (user_id);
