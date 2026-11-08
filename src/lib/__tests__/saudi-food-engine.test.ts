@@ -16,10 +16,10 @@ describe("Saudi Food Engine — Curated Seed Data & Lookups", () => {
     expect(food?.name_ar).toBe("خبز تميس عادي");
     expect(food?.default_portion_g).toBe(90);
     expect(food?.reference_unit_g).toBe(360);
-    expect(food?.per100g.calories).toBe(275);
-    expect(food?.per100g.protein_g).toBe(8.5);
-    expect(food?.per100g.carbs_g).toBe(54);
-    expect(food?.per100g.fat_g).toBe(2.5);
+    expect(food?.per_100g.calories).toBe(275);
+    expect(food?.per_100g.protein_g).toBe(8.5);
+    expect(food?.per_100g.carbs_g).toBe(54);
+    expect(food?.per_100g.fat_g).toBe(2.5);
   });
 
   it("calculates Tamees default portion (90g) to ~248 kcal and ~7.7g protein (never 35g)", () => {
@@ -46,7 +46,7 @@ describe("Saudi Food Engine — Curated Seed Data & Lookups", () => {
   it("scales Tamees deterministically across portion chips (ربع 90g, نص 180g, كامل 360g)", () => {
     const food = searchCuratedFallback("تميس عادي");
     expect(food).not.toBeNull();
-    const p100 = food!.per100g;
+    const p100 = food!.per_100g;
 
     // ربع تميس (90g)
     const quarter = calculateItemMacros(p100, 90);
@@ -67,7 +67,7 @@ describe("Saudi Food Engine — Curated Seed Data & Lookups", () => {
   it("scales Cooked Chicken meat across portion chips (ربع دجاجة 115g, نص دجاجة 230g, كاملة 460g)", () => {
     const food = searchCuratedFallback("دجاج شواية");
     expect(food).not.toBeNull();
-    const p100 = food!.per100g;
+    const p100 = food!.per_100g;
 
     // ربع دجاجة صافي اللحم (115g)
     const quarter = calculateItemMacros(p100, 115);

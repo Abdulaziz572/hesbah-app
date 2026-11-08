@@ -23,6 +23,18 @@ export function mealDisplayName(p: PreviousMeal): string {
   return names.join(" + ") + (p.meal.items.length > 3 ? " …" : "");
 }
 
+/** Case-insensitive, whitespace-collapsed, Arabic-diacritic/alef-insensitive form for matching. */
+function normalizeSearch(s: string): string {
+  return (s ?? "")
+    .toLowerCase()
+    .replace(/[\u064B-\u065F\u0670\u0640]/g, "")
+    .replace(/[أإآ]/g, "ا")
+    .replace(/ة/g, "ه")
+    .replace(/ى/g, "ي")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function MacroPills({ p, c, f }: { p: number; c: number; f: number }) {
   return (
     <div className="flex flex-wrap items-center gap-1.5">
@@ -70,7 +82,7 @@ export default function PreviousMealsSheet({
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [busySig, setBusySig] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-
+  const [searchQuery, setSearchQuery] = useState("");
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape" && !busySig) onClose();
@@ -84,9 +96,17 @@ export default function PreviousMealsSheet({
     };
   }, [busySig, onClose]);
 
+  const normalizedQuery = useMemo(() => normalizeSearch(searchQuery), [searchQuery]);
+
   const visible = useMemo(
-    () => (meals ?? []).filter((m) => tab === "all" || m.isSaved),
-    [meals, tab],
+    () =>
+      (meals ?? []).filter((m) => {
+        if (tab === "saved" && !m.isSaved) return false;
+        if (!normalizedQuery) return true;
+        if (normalizeSearch(m.meal.title ?? "").includes(normalizedQuery)) return true;
+        return m.meal.items.some((i) => normalizeSearch(i.name).includes(normalizedQuery));
+      }),
+    [meals, tab, normalizedQuery],
   );
   const savedCount = (meals ?? []).filter((m) => m.isSaved).length;
 
@@ -219,6 +239,26 @@ export default function PreviousMealsSheet({
               </button>
             ))}
           </div>
+
+          <div className="relative">
+            <span
+              className="material-symbols-outlined pointer-events-none absolute inset-y-0 start-3 flex items-center text-[20px] text-on-surface-variant"
+              aria-hidden
+            >
+              search
+            </span>
+            <input
+              id="prev-meals-search"
+              type="search"
+              dir="rtl"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="ابحث باسم الوجبة أو المكونات..."
+              aria-label="ابحث في وجباتي السابقة"
+              autoComplete="off"
+              className={`w-full h-11 rounded-xl bg-surface-container ps-10 pe-3 text-[14px] text-on-surface placeholder:text-outline border border-outline-variant/30 focus:border-primary/40 outline-none ${focusRing}`}
+            />
+          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto overscroll-contain px-4 py-3 flex flex-col gap-2.5 pb-[max(1.25rem,env(safe-area-inset-bottom))]">
@@ -245,7 +285,17 @@ export default function PreviousMealsSheet({
             </div>
           )}
 
-          {meals && visible.length === 0 && (
+          {meals && visible.length === 0 && normalizedQuery && (
+            <div className="mt-6 flex flex-col items-center gap-2 text-center px-6">
+              <span className="material-symbols-outlined text-[44px] text-outline" aria-hidden>
+                search_off
+              </span>
+              <span className="text-[15px] font-bold text-on-surface">لا توجد نتائج مطابقة</span>
+              <p className="text-[13px] text-on-surface-variant">جرّب اسم وجبة أو مكوّن آخر.</p>
+            </div>
+          )}
+
+          {meals && visible.length === 0 && !normalizedQuery && (
             <div className="mt-6 flex flex-col items-center gap-2 text-center px-6">
               <span className="material-symbols-outlined text-[44px] text-outline" aria-hidden>
                 {tab === "saved" ? "bookmark" : "restaurant"}

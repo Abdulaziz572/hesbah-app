@@ -14,7 +14,14 @@ import type {
   FoodCategory,
 } from "./types";
 import { findFood } from "../foodLookup";
-import { applyPlausibilityChecks, calculateItemMacros, createMacroNutrients } from "../nutrition";
+import {
+  applyPlausibilityChecks,
+  calculateItemMacros,
+  createMacroNutrients,
+  extractSizeModifier,
+  getItemType,
+  resolvePortionGrams,
+} from "../nutrition";
 
 const MODEL_NAME = "gemini-3.5-flash-lite";
 const SCHEMA_VERSION = "2.0";
@@ -37,6 +44,8 @@ STRICT ROLE & BOUNDARIES:
    - Set "portion_assumed": true whenever the user did not specify an exact weight, count, or fraction (e.g. "أكلت تميس", "أكلت صحن كبسة"). Set false when stated.
 4. AI FALLBACK NUTRITION (Strictly per 100g cooked/ready-to-eat):
    - Fill "ai_fallback_per_100g" (and "ai_estimated_per_100g") with kcal, protein_g, carbs_g, fat_g per 100g as described.
+   - KEY SEMANTICS (never swap): "protein_g" = grams of PROTEIN, "carbs_g" = grams of CARBOHYDRATES, "fat_g" = grams of FAT. Never put carbohydrates in protein_g or vice versa.
+   - PER-ITEM BINDING: each item's ai_estimated_per_100g must describe THAT item only. Never copy or move one item's macros to another item in a composite meal (rice: ~28-30g carbs, ~3g protein; chicken/meat: ~25-27g protein, 0g carbs; boiled egg: ~13g protein, ~1g carbs, ~10g fat).
    - Adhere to realistic biological limits (bread has ~8-11g protein/100g, cooked rice has ~2.5-3g protein/100g, dates have ~2g protein/100g). NEVER estimate 30g+ protein for breads!
 5. OUTPUT:
    - Output ONLY a JSON object conforming to the schema. No markdown fences, no conversational commentary.
@@ -122,6 +131,11 @@ const MEAL_DRAFT_SCHEMA: ResponseSchema = {
           },
           extracted_grams: { type: SchemaType.NUMBER },
           fraction_of_reference: { type: SchemaType.NUMBER },
+          size_modifier: {
+            type: SchemaType.STRING,
+            format: "enum",
+            enum: ["small", "medium", "large"],
+          },
           portion_assumed: { type: SchemaType.BOOLEAN },
           ai_fallback_per_100g: {
             type: SchemaType.OBJECT,
@@ -239,6 +253,11 @@ const SINGLE_ITEM_SCHEMA: ResponseSchema = {
     },
     grams: { type: SchemaType.NUMBER },
     fraction_of_reference: { type: SchemaType.NUMBER },
+    size_modifier: {
+      type: SchemaType.STRING,
+      format: "enum",
+      enum: ["small", "medium", "large"],
+    },
     portion_assumed: { type: SchemaType.BOOLEAN },
     cooking_state: {
       type: SchemaType.STRING,
@@ -336,7 +355,7 @@ export class MealParser {
 
         // 2. Cooked Chicken Meat Item
         result.push({
-          name_ar: "دجاج شواية / مضغوط / مندي / كبسة (صافي اللحم المأكول بدون العظم)",
+          name_ar: "دجاج شواية",
           name_en: "Cooked Chicken Meat (Boneless / Edible)",
           canonical_name: "Cooked Chicken Meat (Boneless / Edible)",
           category: "meat_poultry",
@@ -416,7 +435,24 @@ export class MealParser {
     draft.input_type = inputType;
 
     // Apply deterministic composite dish decomposition post-processing
-    draft.items = MealParser.decomposeCompositeDishes(draft.items);
+    draft.items = MealParser.decomposeCompositeDishes(draft.items).map((item) => {
+      const sizeMod = item.size_modifier || extractSizeModifier(item.name_ar || "");
+      const resolvedGrams = resolvePortionGrams({
+        name_ar: item.name_ar,
+        name_en: item.name_en,
+        category: item.category,
+        extracted_grams: item.extracted_grams,
+        fraction_of_reference: item.fraction_of_reference,
+        size_modifier: sizeMod,
+        portion_assumed: item.portion_assumed,
+        quantity: item.quantity,
+      });
+      return {
+        ...item,
+        size_modifier: sizeMod,
+        extracted_grams: resolvedGrams,
+      };
+    });
 
     return draft;
   }
@@ -567,31 +603,44 @@ export class MealParser {
       console.warn("[MealParser] lookup for single item failed:", e);
     }
 
-    let grams = Math.max(1, Math.min(5000, Math.round(Number(parsed.grams) || Number(currentItem?.grams) || 100)));
-    if (parsed.fraction_of_reference && dbFood?.reference_unit_g) {
-      grams = Math.round(dbFood.reference_unit_g * parsed.fraction_of_reference);
-    } else if (parsed.portion_assumed && dbFood?.default_portion_g) {
-      grams = dbFood.default_portion_g;
-    }
+    const sizeMod = parsed.size_modifier || extractSizeModifier(`${name_ar} ${prompt}`);
+    const grams = resolvePortionGrams(
+      {
+        name_ar: `${name_ar} ${prompt}`,
+        name_en,
+        category,
+        extracted_grams: Number(parsed.grams) || Number(currentItem?.grams) || undefined,
+        fraction_of_reference: parsed.fraction_of_reference,
+        size_modifier: sizeMod,
+        portion_assumed: parsed.portion_assumed,
+      },
+      dbFood,
+    );
 
     // Per 100g base: prioritize curated DB values, otherwise use AI estimate
     const est = parsed.ai_estimated_per_100g || {};
-    const rawP100 = dbFood?.per100g ?? {
+    const rawP100 = dbFood?.per_100g ?? {
       calories: Math.max(0, Math.round(Number(est.kcal) || 0)),
       protein_g: Math.max(0, Math.round((Number(est.protein_g) || 0) * 10) / 10),
       carbs_g: Math.max(0, Math.round((Number(est.carbs_g) || 0) * 10) / 10),
       fat_g: Math.max(0, Math.round((Number(est.fat_g) || 0) * 10) / 10),
     };
 
+    const unitType = dbFood?.unit_type || (category === "beverage" ? "ml" : "g");
+    const itemType = dbFood?.item_type || getItemType(name_ar, name_en, category);
+
     // 2. Apply deterministic plausibility checks
     const plausibleItem = applyPlausibilityChecks({
       id: "single-temp",
       canonical_name: name_en,
-      display_name_ar: name_ar,
+      display_name_ar: dbFood?.name_ar || name_ar,
       grams,
+      unit_type: unitType,
+      item_type: itemType,
+      size_modifier: sizeMod,
       state: "ready_to_eat",
       category: dbFood?.category || category,
-      per_100g: createMacroNutrients(rawP100.calories, rawP100.protein_g, rawP100.carbs_g, rawP100.fat_g),
+      per_100g: createMacroNutrients(rawP100.calories, rawP100.protein_g, rawP100.carbs_g, rawP100.fat_g, rawP100),
       source: dbFood ? "db_match" : "ai_estimate",
       confidence: "high",
       portion_assumed: !!parsed.portion_assumed,
@@ -603,21 +652,19 @@ export class MealParser {
     const derived = calculateItemMacros(plausibleItem.per_100g, finalGrams);
 
     return {
-      name_ar,
+      name_ar: plausibleItem.display_name_ar,
       name_en,
       category: plausibleItem.category,
       grams: finalGrams,
-      per100g: {
-        calories: plausibleItem.per_100g.calories,
-        protein: plausibleItem.per_100g.protein_g,
-        carbs: plausibleItem.per_100g.carbs_g,
-        fat: plausibleItem.per_100g.fat_g,
-      },
+      unit_type: plausibleItem.unit_type,
+      item_type: plausibleItem.item_type,
+      per_100g: { ...plausibleItem.per_100g },
       calories: derived.calories,
       protein: derived.protein_g,
       carbs: derived.carbs_g,
       fat: derived.fat_g,
       cooking_state: parsed.cooking_state,
+      default_portion_g: dbFood?.default_portion_g,
       reference_unit_g: dbFood?.reference_unit_g,
       portion_assumed: plausibleItem.portion_assumed,
       plausibility_warning: plausibleItem.plausibility_warning,

@@ -22,6 +22,9 @@ export const queryKeys = {
   /** User profile and daily target settings */
   profile: (userId: string) => ["profile", userId] as const,
 
+  /** Daily weight logs for EMA trend & projection */
+  weightLogs: (userId: string) => ["weight-logs", userId] as const,
+
   /** Previous / saved meals list for the Add Meal screen */
   previousMeals: (userId: string) => ["previous-meals", userId] as const,
 };
@@ -52,6 +55,7 @@ export async function invalidateUserProfile(
   if (!userId) return;
   await Promise.all([
     queryClient.invalidateQueries({ queryKey: queryKeys.profile(userId) }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.weightLogs(userId) }),
     queryClient.invalidateQueries({ queryKey: queryKeys.allMeals(userId) }),
   ]);
 }

@@ -4,20 +4,31 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/src/context/AuthContext";
 import { useTheme, type Theme } from "@/src/context/ThemeContext";
+import { localDateString } from "@/src/lib/dates";
+import { fetchMealsForDay } from "@/src/lib/meals";
 import { queryKeys, invalidateUserProfile } from "@/src/lib/queryKeys";
 import {
   ACTIVITY_MULTIPLIERS,
-  GOAL_ADJUSTMENTS,
   MIN_DAILY_CALORIES,
   STAT_LIMITS,
   caloriesFromMacros,
   calculateDailyTargets,
+  calculateWeightEMA,
   defaultProfile,
+  estimateDailyWeightChangeKg,
+  estimateGoalDate,
+  estimateWeeksToGoal,
   getCachedUserProfile,
+  getCachedWeightLogs,
   getUserProfile,
+  getWeightLogs,
+  logDailyWeight,
+  maxSafeWeeklyPace,
   saveUserProfile,
+  sumMacros,
   type ActivityLevel,
   type DailyTargets,
+  type DietStyle,
   type Gender,
   type GoalType,
   type UserProfile,
@@ -28,6 +39,10 @@ import {
 /* ------------------------------------------------------------------ */
 
 const fmt = (n: number) => Math.round(n).toLocaleString("en-US");
+const fmtKg = (n: number) => {
+  const r = Math.round(n * 10) / 10;
+  return Number.isInteger(r) ? String(r) : r.toFixed(1);
+};
 
 const GENDER_OPTIONS: { value: Gender; label: string }[] = [
   { value: "male", label: "ذكر" },
@@ -42,9 +57,48 @@ const ACTIVITY_OPTIONS: { value: ActivityLevel; label: string; hint: string; ico
 ];
 
 const GOAL_OPTIONS: { value: GoalType; label: string; hint: string; icon: string }[] = [
-  { value: "lose", label: "خسارة وزن", hint: "عجز 500 سعرة", icon: "trending_down" },
+  { value: "lose", label: "خسارة وزن", hint: "عجز سعرات ذكي", icon: "trending_down" },
   { value: "maintain", label: "المحافظة على الوزن", hint: "بدون تعديل", icon: "balance" },
-  { value: "gain", label: "زيادة وزن وعضل", hint: "فائض 300 سعرة", icon: "trending_up" },
+  { value: "gain", label: "زيادة وزن وعضل", hint: "فائض سعرات ذكي", icon: "trending_up" },
+];
+
+const PACE_OPTIONS: {
+  value: number;
+  emoji: string;
+  title: string;
+  subtitle: string;
+  recommended?: boolean;
+}[] = [
+  { value: 0.25, emoji: "🐢", title: "هادئة", subtitle: "0.25 كجم/أسبوع" },
+  { value: 0.5, emoji: "⚖️", title: "متوازنة", subtitle: "0.50 كجم/أسبوع", recommended: true },
+  { value: 0.75, emoji: "⚡", title: "سريعة", subtitle: "0.75 كجم/أسبوع" },
+  { value: 1.0, emoji: "🔥", title: "مكثفة", subtitle: "1.00 كجم/أسبوع" },
+];
+
+const DIET_STYLE_OPTIONS: {
+  value: DietStyle;
+  title: string;
+  subtitle: string;
+  icon: string;
+}[] = [
+  {
+    value: "balanced",
+    title: "متوازن",
+    subtitle: "بروتين 1.6 جم/كجم • دهون 30%",
+    icon: "balance",
+  },
+  {
+    value: "high_protein",
+    title: "عالي البروتين",
+    subtitle: "بروتين 2.0 جم/كجم • دهون 25%",
+    icon: "fitness_center",
+  },
+  {
+    value: "low_carb",
+    title: "قليل الكارب",
+    subtitle: "بروتين 2.0 جم/كجم • دهون 40%",
+    icon: "grain",
+  },
 ];
 
 const GOAL_RECEIPT_LABEL: Record<GoalType, string> = {
@@ -73,6 +127,9 @@ const COMPARE_KEYS: (keyof UserProfile)[] = [
   "weight_kg",
   "activity_level",
   "goal_type",
+  "target_weight_kg",
+  "weekly_pace_kg",
+  "diet_style",
   "target_calories",
   "target_protein_g",
   "target_carbs_g",
@@ -480,6 +537,28 @@ export default function ProfileSettings() {
     initialData: () => (userId ? getCachedUserProfile(userId) ?? undefined : undefined),
   });
 
+  // Weight logs query for EMA trend & goal projection
+  const { data: weightLogs = [] } = useQuery({
+    queryKey: queryKeys.weightLogs(userId),
+    queryFn: () => getWeightLogs(userId),
+    enabled: !!userId,
+    initialData: () => (userId ? getCachedWeightLogs(userId) : []),
+  });
+
+  // Today's meals query for dynamic daily calorie deficit & expected weight loss insight
+  const todayDate = useMemo(() => new Date(), []);
+  const todayDateKey = useMemo(() => localDateString(todayDate), [todayDate]);
+  const { data: todayMeals = [] } = useQuery({
+    queryKey: queryKeys.meals(userId, todayDateKey),
+    queryFn: () => fetchMealsForDay(todayDate, userId),
+    enabled: !!userId,
+  });
+
+  const [weightInputOpen, setWeightInputOpen] = useState(false);
+  const [weightDraft, setWeightDraft] = useState("");
+  const [weightSaving, setWeightSaving] = useState(false);
+  const [weightNotice, setWeightNotice] = useState<string | null>(null);
+
   useEffect(() => {
     if (profileData && !touchedRef.current) {
       setSaved(profileData);
@@ -494,6 +573,29 @@ export default function ProfileSettings() {
     setForm((f) => ({ ...f, ...patch }));
   }, []);
 
+  const maxSafePace = useMemo(() => maxSafeWeeklyPace(form.weight_kg), [form.weight_kg]);
+
+  const effectiveTargetWeight = useMemo(() => {
+    if (form.target_weight_kg != null && Number.isFinite(form.target_weight_kg)) {
+      return form.target_weight_kg;
+    }
+    if (form.goal_type === "lose") {
+      return Math.max(STAT_LIMITS.weight_kg.min, Math.round((form.weight_kg - 5) * 10) / 10);
+    }
+    if (form.goal_type === "gain") {
+      return Math.min(STAT_LIMITS.weight_kg.max, Math.round((form.weight_kg + 5) * 10) / 10);
+    }
+    return form.weight_kg;
+  }, [form.target_weight_kg, form.goal_type, form.weight_kg]);
+
+  const effectivePace = useMemo(() => {
+    const raw = form.weekly_pace_kg ?? 0.5;
+    if (form.goal_type === "lose") {
+      return Math.min(raw, maxSafePace);
+    }
+    return raw;
+  }, [form.weekly_pace_kg, form.goal_type, maxSafePace]);
+
   const calc = useMemo(
     () =>
       calculateDailyTargets({
@@ -503,8 +605,21 @@ export default function ProfileSettings() {
         weight_kg: form.weight_kg,
         activity_level: form.activity_level,
         goal_type: form.goal_type,
+        target_weight_kg: form.goal_type === "maintain" ? null : effectiveTargetWeight,
+        weekly_pace_kg: effectivePace,
+        diet_style: form.diet_style ?? "balanced",
       }),
-    [form.gender, form.age, form.height_cm, form.weight_kg, form.activity_level, form.goal_type],
+    [
+      form.gender,
+      form.age,
+      form.height_cm,
+      form.weight_kg,
+      form.activity_level,
+      form.goal_type,
+      effectiveTargetWeight,
+      effectivePace,
+      form.diet_style,
+    ],
   );
 
   const targets: DailyTargets = form.is_custom_targets
@@ -521,7 +636,13 @@ export default function ProfileSettings() {
         target_fat_g: calc.target_fat_g,
       };
 
-  const effective: UserProfile = { ...form, ...targets };
+  const effective: UserProfile = {
+    ...form,
+    target_weight_kg: form.goal_type === "maintain" ? null : effectiveTargetWeight,
+    weekly_pace_kg: effectivePace,
+    diet_style: form.diet_style ?? "balanced",
+    ...targets,
+  };
   const dirty = saved ? !sameProfile(effective, saved) : touched;
 
   // Warn before leaving with unsaved edits.
@@ -556,6 +677,11 @@ export default function ProfileSettings() {
     if (!userId) return;
     setSaving(true);
     const res = await saveUserProfile({ ...effective, user_id: userId });
+    try {
+      await logDailyWeight(userId, effective.weight_kg);
+    } catch {
+      // ignore
+    }
     setForm(res.profile);
     setSaved(res.profile);
     touchedRef.current = false;
@@ -578,6 +704,71 @@ export default function ProfileSettings() {
   const macroGap = macroKcal - targets.target_calories;
   const contact = user?.email || user?.phone || "";
   const initial = (user?.email?.[0] ?? "").toUpperCase();
+
+  // EMA weight trend & daily projection math for the Profile Weight Tracker card
+  const emaData = useMemo(() => calculateWeightEMA(weightLogs), [weightLogs]);
+  const currentWeightKg = emaData.latest_weight_kg ?? form.weight_kg;
+  const emaWeightKg = emaData.ema_kg ?? currentWeightKg;
+  const targetWeightKg =
+    form.goal_type === "maintain" ? null : (form.target_weight_kg ?? effectiveTargetWeight);
+  const todayTotals = useMemo(
+    () => sumMacros(todayMeals.map((m) => m.totals)),
+    [todayMeals],
+  );
+  const dailyDeficit = Math.round(calc.tdee - todayTotals.calories);
+  const expectedDailyChangeKg = useMemo(
+    () => estimateDailyWeightChangeKg(calc.tdee, todayTotals.calories),
+    [calc.tdee, todayTotals.calories],
+  );
+  const expectedWeeklyChangeKg = Number((Math.abs(expectedDailyChangeKg) * 7).toFixed(2));
+
+  const weightProgressPct = useMemo(() => {
+    if (targetWeightKg == null) return 0;
+    const startWeight = emaData.points.length > 0 ? emaData.points[0].weight_kg : currentWeightKg;
+    const totalSpan = Math.abs(startWeight - targetWeightKg);
+    const remaining = Math.abs(emaWeightKg - targetWeightKg);
+    if (remaining <= 0.05) return 100;
+    if (totalSpan <= 0.1) return 12;
+    const completed = Math.max(0, totalSpan - remaining);
+    return Math.min(100, Math.max(8, Math.round((completed / totalSpan) * 100)));
+  }, [targetWeightKg, emaData.points, currentWeightKg, emaWeightKg]);
+
+  function openWeightLogger() {
+    setWeightDraft(String(currentWeightKg));
+    setWeightInputOpen((v) => !v);
+  }
+
+  async function handleSaveDailyWeight(e: React.FormEvent) {
+    e.preventDefault();
+    if (!userId) return;
+    const normalized = toLatinNumber(weightDraft);
+    const parsed = parseFloat(normalized);
+    if (
+      !Number.isFinite(parsed) ||
+      parsed < STAT_LIMITS.weight_kg.min ||
+      parsed > STAT_LIMITS.weight_kg.max
+    ) {
+      return;
+    }
+    const rounded = Math.round(parsed * 10) / 10;
+    setWeightSaving(true);
+    try {
+      await logDailyWeight(userId, rounded, todayDateKey);
+      const updatedProfile = getCachedUserProfile(userId);
+      if (updatedProfile) {
+        setForm(updatedProfile);
+        setSaved(updatedProfile);
+      } else {
+        setForm((prev) => ({ ...prev, weight_kg: rounded }));
+      }
+      await invalidateUserProfile(queryClient, userId);
+      setWeightInputOpen(false);
+      setWeightNotice(`تم تسجيل وزن اليوم (${rounded.toFixed(1)} كجم) وتحديث خط الاتجاه ✓`);
+      window.setTimeout(() => setWeightNotice(null), 3500);
+    } finally {
+      setWeightSaving(false);
+    }
+  }
 
   return (
     <div className="max-w-md w-full mx-auto min-h-screen flex flex-col pb-28">
@@ -699,6 +890,215 @@ export default function ProfileSettings() {
                   </span>
                 </div>
               </button>
+
+              {/* ---------- Smart Weight Tracker & Daily Projection Card ---------- */}
+              <div
+                aria-label="متتبع الوزن والتوقع اليومي"
+                className={`${card} p-4 flex flex-col gap-3 mt-1`}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-center gap-2.5">
+                    <span
+                      aria-hidden="true"
+                      className="w-10 h-10 shrink-0 rounded-xl bg-primary-fixed text-on-primary-fixed flex items-center justify-center"
+                    >
+                      <span className="material-symbols-outlined text-[20px]">monitoring</span>
+                    </span>
+                    <div className="flex flex-col">
+                      <h3 className="text-[15px] font-bold text-on-surface leading-tight">
+                        متتبع الوزن والتوقع اليومي
+                      </h3>
+                      <span className="text-[11px] text-on-surface-variant">
+                        خط الاتجاه يخفي تذبذب الماء والأملاح
+                      </span>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={openWeightLogger}
+                    className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-xl bg-primary-fixed text-on-primary-fixed hover:bg-primary hover:text-on-primary text-[12px] font-bold transition-colors active:scale-95 shrink-0 ${focusRing}`}
+                  >
+                    <span className="material-symbols-outlined text-[16px]">
+                      {weightInputOpen ? "close" : "add"}
+                    </span>
+                    <span>{weightInputOpen ? "إغلاق" : "+ سجل وزن اليوم"}</span>
+                  </button>
+                </div>
+
+                {weightNotice && (
+                  <div
+                    role="status"
+                    className="p-2.5 rounded-xl bg-primary-fixed text-on-primary-fixed text-[12px] font-semibold flex items-center gap-1.5"
+                  >
+                    <span className="material-symbols-outlined text-[16px]" aria-hidden="true">
+                      check_circle
+                    </span>
+                    <span>{weightNotice}</span>
+                  </div>
+                )}
+
+                {/* Inline quick weight logger */}
+                {weightInputOpen && (
+                  <form
+                    onSubmit={handleSaveDailyWeight}
+                    className="flex items-center gap-2 p-2.5 rounded-2xl bg-surface-container-low border border-outline-variant/30 animate-fade-in"
+                  >
+                    <label htmlFor="profile-quick-weight-input" className="text-[13px] font-semibold text-on-surface ps-1">
+                      وزن اليوم:
+                    </label>
+                    <div className="flex items-center gap-1 ms-auto" dir="ltr">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const cur = parseFloat(weightDraft) || currentWeightKg;
+                          setWeightDraft((Math.round((cur - 0.1) * 10) / 10).toFixed(1));
+                        }}
+                        aria-label="إنقاص 0.1 كجم"
+                        className="w-8 h-8 rounded-lg bg-surface-container-lowest dark:bg-surface-container-high text-on-surface flex items-center justify-center shadow-sm active:scale-90"
+                      >
+                        <span className="material-symbols-outlined text-[16px]">remove</span>
+                      </button>
+                      <input
+                        id="profile-quick-weight-input"
+                        type="text"
+                        inputMode="decimal"
+                        value={weightDraft}
+                        onChange={(e) => setWeightDraft(e.target.value)}
+                        className="w-16 h-8 text-center font-bold text-[15px] tabular-nums bg-surface-container-lowest dark:bg-surface-container-high text-on-surface rounded-lg border border-outline-variant/40 focus-visible:outline-2 focus-visible:outline-primary"
+                      />
+                      <span className="text-[11px] text-on-surface-variant">كجم</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const cur = parseFloat(weightDraft) || currentWeightKg;
+                          setWeightDraft((Math.round((cur + 0.1) * 10) / 10).toFixed(1));
+                        }}
+                        aria-label="زيادة 0.1 كجم"
+                        className="w-8 h-8 rounded-lg bg-surface-container-lowest dark:bg-surface-container-high text-on-surface flex items-center justify-center shadow-sm active:scale-90"
+                      >
+                        <span className="material-symbols-outlined text-[16px]">add</span>
+                      </button>
+                    </div>
+                    <button
+                      type="submit"
+                      disabled={weightSaving}
+                      className="h-8 px-3.5 rounded-xl bg-primary text-on-primary text-[12px] font-bold active:scale-95 transition-transform disabled:opacity-60"
+                    >
+                      {weightSaving ? "..." : "حفظ"}
+                    </button>
+                  </form>
+                )}
+
+                {/* Current Weight vs EMA Trend */}
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div className="p-3 rounded-2xl bg-surface-container-low flex flex-col gap-0.5">
+                    <span className="text-[11px] text-on-surface-variant">الوزن الحالي</span>
+                    <div className="flex items-baseline gap-1">
+                      <span className="text-[20px] font-bold tabular-nums text-on-surface">
+                        {currentWeightKg.toFixed(1)}
+                      </span>
+                      <span className="text-[11px] text-on-surface-variant">كجم</span>
+                    </div>
+                  </div>
+                  <div
+                    className="p-3 rounded-2xl bg-primary-fixed/30 dark:bg-primary-fixed/20 border border-primary/20 flex flex-col gap-0.5"
+                    title="خط الاتجاه يخفي تذبذب الماء والأملاح"
+                  >
+                    <div className="flex items-center justify-between gap-1">
+                      <span className="text-[11px] font-semibold text-primary">خط الاتجاه الحقيقي (EMA)</span>
+                      {emaData.points.length > 1 && emaData.trend_7d_kg !== 0 && (
+                        <span
+                          dir="ltr"
+                          className={`text-[10px] font-bold tabular-nums px-1.5 py-0.5 rounded-full ${
+                            emaData.trend_7d_kg < 0
+                              ? "bg-primary/15 text-primary"
+                              : "bg-tertiary-container/40 text-on-surface"
+                          }`}
+                        >
+                          {emaData.trend_7d_kg > 0 ? `+${emaData.trend_7d_kg}` : emaData.trend_7d_kg} kg
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-baseline gap-1">
+                      <span className="text-[20px] font-bold tabular-nums text-primary">
+                        {emaWeightKg.toFixed(2)}
+                      </span>
+                      <span className="text-[11px] text-on-surface-variant">كجم</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Progress toward target_weight_kg */}
+                {targetWeightKg != null ? (
+                  <div className="flex flex-col gap-1.5">
+                    <div className="flex items-center justify-between text-[12px]">
+                      <span className="text-on-surface-variant">
+                        الهدف: <strong className="text-on-surface tabular-nums">{targetWeightKg} كجم</strong>{" "}
+                        (باقي {Math.abs(emaWeightKg - targetWeightKg).toFixed(1)} كجم)
+                      </span>
+                      {Math.abs(emaWeightKg - targetWeightKg) > 0.05 && (
+                        <span className="text-[11px] text-primary font-semibold">
+                          الوصول المتوقع:{" "}
+                          {new Intl.DateTimeFormat("ar-SA", { day: "numeric", month: "short" }).format(
+                            estimateGoalDate(emaWeightKg, targetWeightKg, effectivePace),
+                          )}{" "}
+                          (~{estimateWeeksToGoal(emaWeightKg, targetWeightKg, effectivePace)} أسبوع)
+                        </span>
+                      )}
+                    </div>
+                    <div
+                      className="w-full h-2 rounded-full bg-surface-container overflow-hidden"
+                      role="progressbar"
+                      aria-label="التقدم نحو الوزن المستهدف"
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={weightProgressPct}
+                    >
+                      <div
+                        className="h-full rounded-full bg-primary transition-[width] duration-500"
+                        style={{ width: `${weightProgressPct}%` }}
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={openCalculator}
+                    className={`w-full flex items-center justify-between px-3 py-2 rounded-xl bg-surface-container-low hover:bg-surface-container text-[12px] text-on-surface-variant transition-colors cursor-pointer ${focusRing}`}
+                  >
+                    <span>حدد وزنك المستهدف وسرعة الوصول لحساب تاريخ تحقيق هدفك</span>
+                    <span className="text-primary font-bold">ضبط الهدف ←</span>
+                  </button>
+                )}
+
+                {/* Dynamic daily calorie deficit & expected weight loss insight */}
+                <div className="flex items-start gap-2 pt-2 border-t border-outline-variant/20 text-[12px]">
+                  <span aria-hidden="true" className="material-symbols-outlined text-[16px] text-primary shrink-0 mt-0.5">
+                    insights
+                  </span>
+                  <p className="text-on-surface-variant leading-relaxed">
+                    {todayTotals.calories === 0 ? (
+                      <span>سجّل وجباتك اليوم لحساب عجزك وتوقع نزول وزنك اليومي والأسبوعي.</span>
+                    ) : dailyDeficit >= 0 ? (
+                      <span>
+                        بناءً على سعراتك اليوم، عجزك{" "}
+                        <strong className="text-on-surface tabular-nums">{fmt(dailyDeficit)}</strong> سعرة (توقع نزول{" "}
+                        <strong className="text-primary tabular-nums">~{expectedWeeklyChangeKg} كجم</strong> هذا الأسبوع •{" "}
+                        <span className="tabular-nums" dir="ltr">
+                          -{Math.abs(expectedDailyChangeKg).toFixed(3)} kg
+                        </span>{" "}
+                        اليوم)
+                      </span>
+                    ) : (
+                      <span>
+                        بناءً على سعراتك اليوم، فائضك{" "}
+                        <strong className="text-on-surface tabular-nums">{fmt(Math.abs(dailyDeficit))}</strong> سعرة (توقع زيادة{" "}
+                        <strong className="text-tertiary tabular-nums">~{expectedWeeklyChangeKg} كجم</strong> هذا الأسبوع)
+                      </span>
+                    )}
+                  </p>
+                </div>
+              </div>
             </section>
 
             {/* ---------- App Settings (Theme) ---------- */}
@@ -892,7 +1292,25 @@ export default function ProfileSettings() {
                           name="goal_type"
                           value={o.value}
                           checked={checked}
-                          onChange={() => update({ goal_type: o.value })}
+                          onChange={() => {
+                            const nextGoal = o.value;
+                            let nextTarget = form.target_weight_kg;
+                            if (nextGoal === "lose" && (nextTarget == null || nextTarget >= form.weight_kg)) {
+                              nextTarget = Math.max(
+                                STAT_LIMITS.weight_kg.min,
+                                Math.round((form.weight_kg - 5) * 10) / 10,
+                              );
+                            } else if (
+                              nextGoal === "gain" &&
+                              (nextTarget == null || nextTarget <= form.weight_kg)
+                            ) {
+                              nextTarget = Math.min(
+                                STAT_LIMITS.weight_kg.max,
+                                Math.round((form.weight_kg + 5) * 10) / 10,
+                              );
+                            }
+                            update({ goal_type: nextGoal, target_weight_kg: nextTarget });
+                          }}
                           className="sr-only"
                         />
                         <span
@@ -905,6 +1323,177 @@ export default function ProfileSettings() {
                           {o.label}
                         </span>
                         <span className="text-[11px] text-on-surface-variant">{o.hint}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </fieldset>
+
+              {/* Target Weight & Weekly Pace (when goal is lose or gain) */}
+              {(form.goal_type === "lose" || form.goal_type === "gain") && (
+                <div className="flex flex-col gap-4 mt-3 animate-fade-in">
+                  {/* Target weight stepper + motivating badge */}
+                  <div className={`${card} p-3 flex flex-col gap-2`}>
+                    <NumberStepper
+                      id={`${uid}-target-weight`}
+                      name="target_weight_kg"
+                      label="الوزن المستهدف (كجم)"
+                      unit="كجم"
+                      value={effectiveTargetWeight}
+                      min={STAT_LIMITS.weight_kg.min}
+                      max={STAT_LIMITS.weight_kg.max}
+                      step={0.5}
+                      decimals={1}
+                      onChange={(n) => update({ target_weight_kg: n })}
+                    />
+                    <div className="px-3 pb-1 flex items-center justify-between gap-2">
+                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-primary-fixed/60 dark:bg-primary-fixed/40 text-on-primary-fixed text-[12px] font-semibold">
+                        <span aria-hidden="true" className="material-symbols-outlined text-[16px] text-primary">
+                          flag
+                        </span>
+                        <span>
+                          باقي لك{" "}
+                          <strong className="tabular-nums">
+                            {fmtKg(Math.abs(form.weight_kg - effectiveTargetWeight))}
+                          </strong>{" "}
+                          كجم للوصول لهدفك
+                        </span>
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Weekly pace selector cards */}
+                  <fieldset className="flex flex-col gap-2 min-w-0">
+                    <legend className="text-[13px] font-semibold text-on-surface-variant px-1 mb-1">
+                      سرعة الوصول للهدف
+                    </legend>
+                    <div className="grid grid-cols-2 gap-2.5">
+                      {PACE_OPTIONS.map((p) => {
+                        const exceedsSafe = form.goal_type === "lose" && p.value > maxSafePace;
+                        const checked = Math.abs(effectivePace - p.value) < 0.01;
+                        return (
+                          <label
+                            key={p.value}
+                            aria-disabled={exceedsSafe}
+                            className={`relative flex flex-col gap-1 p-3.5 rounded-2xl border select-none transition-all has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-primary ${
+                              exceedsSafe
+                                ? "opacity-45 cursor-not-allowed border-outline-variant/25 bg-surface-container-low"
+                                : checked
+                                  ? "cursor-pointer border-primary bg-primary-fixed/35 dark:bg-primary-fixed/50 shadow-sm"
+                                  : "cursor-pointer border-outline-variant/40 bg-surface-container-lowest hover:border-primary/30"
+                            }`}
+                          >
+                            <input
+                              type="radio"
+                              name="weekly_pace_kg"
+                              value={p.value}
+                              disabled={exceedsSafe}
+                              checked={checked}
+                              onChange={() => {
+                                if (!exceedsSafe) update({ weekly_pace_kg: p.value });
+                              }}
+                              className="sr-only"
+                            />
+                            <div className="flex items-center justify-between gap-1.5">
+                              <span className="flex items-center gap-1.5 text-[14px] font-bold text-on-surface">
+                                <span aria-hidden="true">{p.emoji}</span>
+                                <span>{p.title}</span>
+                              </span>
+                              {p.recommended && !exceedsSafe && (
+                                <span className="px-2 py-0.5 rounded-full bg-primary text-on-primary text-[10px] font-bold">
+                                  موصى به
+                                </span>
+                              )}
+                            </div>
+                            <span className="text-[12px] text-on-surface-variant tabular-nums">
+                              {p.subtitle}
+                            </span>
+                            {exceedsSafe && (
+                              <span className="text-[10px] text-error font-medium mt-0.5">
+                                يتجاوز الحد الآمن لوزنك (~1% أسبوعياً)
+                              </span>
+                            )}
+                          </label>
+                        );
+                      })}
+                    </div>
+
+                    {/* Immediate Expected Duration & Goal Date Banner */}
+                    {Math.abs(form.weight_kg - effectiveTargetWeight) > 0.05 && (
+                      <div className="flex items-center justify-between gap-2 px-3.5 py-2.5 rounded-xl bg-surface-container-low border border-outline-variant/25 text-[12px]">
+                        <span className="flex items-center gap-1.5 font-semibold text-on-surface">
+                          <span aria-hidden="true" className="material-symbols-outlined text-[18px] text-primary">
+                            event_available
+                          </span>
+                          <span>
+                            الوصول المتوقع خلال ~
+                            {estimateWeeksToGoal(form.weight_kg, effectiveTargetWeight, effectivePace)} أسابيع
+                          </span>
+                        </span>
+                        <span className="text-on-surface-variant">
+                          ({new Intl.DateTimeFormat("ar-SA", { day: "numeric", month: "short", year: "numeric" }).format(
+                            estimateGoalDate(form.weight_kg, effectiveTargetWeight, effectivePace),
+                          )})
+                        </span>
+                      </div>
+                    )}
+                    {form.goal_type === "lose" && maxSafePace < 1.0 && (
+                      <p className="text-[11px] text-on-surface-variant px-1">
+                        ملاحظة: لحماية الكتلة العضلية وصحتك، الحد الآمن للنزول لوزنك الحالي هو{" "}
+                        <span className="font-semibold tabular-nums">{maxSafePace.toFixed(2)} كجم/أسبوع</span>.
+                      </p>
+                    )}
+                  </fieldset>
+                </div>
+              )}
+
+              {/* Diet style selector cards */}
+              <fieldset className="flex flex-col gap-2 mt-3 min-w-0">
+                <legend className="text-[13px] font-semibold text-on-surface-variant px-1 mb-2">
+                  نظام توزيع الأكل
+                </legend>
+                <div className="flex flex-col gap-2">
+                  {DIET_STYLE_OPTIONS.map((d) => {
+                    const checked = (form.diet_style ?? "balanced") === d.value;
+                    return (
+                      <label
+                        key={d.value}
+                        className={`flex items-center gap-3 px-4 py-3 rounded-2xl border cursor-pointer select-none transition-all has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-primary ${
+                          checked
+                            ? "border-primary bg-primary-fixed/35 dark:bg-primary-fixed/50 shadow-sm"
+                            : "border-outline-variant/40 bg-surface-container-lowest hover:border-primary/30"
+                        }`}
+                      >
+                        <input
+                          type="radio"
+                          name="diet_style"
+                          value={d.value}
+                          checked={checked}
+                          onChange={() => update({ diet_style: d.value })}
+                          className="sr-only"
+                        />
+                        <span
+                          aria-hidden="true"
+                          className={`w-10 h-10 shrink-0 rounded-xl flex items-center justify-center transition-colors ${
+                            checked
+                              ? "bg-primary text-on-primary"
+                              : "bg-surface-container-low text-on-surface-variant"
+                          }`}
+                        >
+                          <span className="material-symbols-outlined text-[20px]">{d.icon}</span>
+                        </span>
+                        <span className="flex-1 min-w-0 flex flex-col">
+                          <span className="text-[14px] font-bold text-on-surface">{d.title}</span>
+                          <span className="text-[12px] text-on-surface-variant">{d.subtitle}</span>
+                        </span>
+                        <span
+                          aria-hidden="true"
+                          className={`w-[22px] h-[22px] shrink-0 rounded-full border-2 flex items-center justify-center transition-colors ${
+                            checked ? "border-primary bg-primary text-on-primary" : "border-outline-variant"
+                          }`}
+                        >
+                          {checked && <span className="material-symbols-outlined text-[16px] font-bold">check</span>}
+                        </span>
                       </label>
                     );
                   })}
@@ -991,7 +1580,7 @@ export default function ProfileSettings() {
                     <ReceiptLine
                       label={GOAL_RECEIPT_LABEL[form.goal_type]}
                       op={calc.adjustment < 0 ? "−" : calc.adjustment > 0 ? "+" : "±"}
-                      value={fmt(Math.abs(GOAL_ADJUSTMENTS[form.goal_type]))}
+                      value={fmt(Math.abs(calc.adjustment))}
                     />
                   </div>
                 )}
@@ -1009,7 +1598,7 @@ export default function ProfileSettings() {
 
                 {!form.is_custom_targets && calc.clampedToMinimum && (
                   <p className="text-[12px] text-on-surface-variant -mt-2">
-                    رُفع الهدف إلى الحد الأدنى الآمن ({fmt(MIN_DAILY_CALORIES)} سعرة).
+                    رُفع الهدف إلى الحد الأدنى الآمن ({fmt(calc.minCalories)} سعرة).
                   </p>
                 )}
 

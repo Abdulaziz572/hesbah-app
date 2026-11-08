@@ -455,7 +455,7 @@ export default function Diary() {
                         {m.items.map((it) => (
                           <li key={it.id} className="flex justify-between text-[13px] text-on-surface-variant">
                             <span>
-                              {it.name} <span className="text-outline">• {fmt(it.grams)}g</span>
+                              {it.name} <span className="text-outline">• {fmt(it.grams)}{it.unit_type || "g"}</span>
                             </span>
                             <span>{fmt(it.calories)}</span>
                           </li>

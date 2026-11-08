@@ -17,6 +17,7 @@ import {
   sumMacros,
   calculateItemMacros,
   normalizeMacroNutrients,
+  normalizeItem,
   type Macros,
 } from "@/src/lib/nutrition";
 import { searchCuratedFallback } from "@/src/lib/foodLookup";
@@ -56,27 +57,40 @@ export default function EditMealSheet({ meal, isPastDate, onClose, onSaved, onCo
   // Initialize items using MealEditorItem
   const [items, setItems] = useState<MealEditorItem[]>(() =>
     meal.items.map((it) => {
-      const p100 = normalizeMacroNutrients(it.per100g);
-      if (p100.calories === 0 && it.calories > 0 && it.grams > 0) {
-        const factor = 100 / it.grams;
-        p100.calories = Math.round(it.calories * factor);
-        p100.protein_g = Math.round(it.protein * factor * 10) / 10;
-        p100.carbs_g = Math.round(it.carbs * factor * 10) / 10;
-        p100.fat_g = Math.round(it.fat * factor * 10) / 10;
-      }
-      const derived = calculateItemMacros(p100, it.grams);
+      const p100 = normalizeMacroNutrients(it.per_100g);
       const curated = searchCuratedFallback(it.name);
+      const norm = normalizeItem({
+        name: it.name,
+        grams: it.grams,
+        unit_type: it.unit_type ?? curated?.unit_type,
+        item_type: curated?.item_type,
+        per_100g: p100.calories > 0 ? p100 : undefined,
+        serving_macros:
+          p100.calories === 0 && it.calories > 0 && it.grams > 0
+            ? {
+                calories: it.calories,
+                protein_g: it.protein,
+                carbs_g: it.carbs,
+                fat_g: it.fat,
+                basis_grams: it.grams,
+              }
+            : undefined,
+      });
 
       return {
         id: it.id,
-        name: it.name,
-        grams: it.grams,
-        calories: it.calories > 0 ? it.calories : derived.calories,
-        protein: it.protein > 0 ? it.protein : derived.protein_g,
-        carbs: it.carbs > 0 ? it.carbs : derived.carbs_g,
-        fat: it.fat > 0 ? it.fat : derived.fat_g,
-        per100g: p100,
+        name: norm.name,
+        grams: norm.grams,
+        unit_type: norm.unit_type,
+        item_type: norm.item_type,
+        calories: norm.calories,
+        protein: norm.protein,
+        carbs: norm.carbs,
+        fat: norm.fat,
+        per_100g: norm.per_100g,
+        default_portion_g: curated?.default_portion_g ?? null,
         reference_unit_g: (it as any).reference_unit_g ?? curated?.reference_unit_g ?? null,
+        category: curated?.category,
       };
     }),
   );
@@ -154,7 +168,8 @@ export default function EditMealSheet({ meal, isPastDate, onClose, onSaved, onCo
           id: it.id.startsWith("added-") || it.id.startsWith("manual-") ? undefined : it.id,
           name: it.name,
           grams: it.grams,
-          per100g: it.per100g,
+          unit_type: it.unit_type,
+          per_100g: it.per_100g,
           calories: it.calories,
           protein: it.protein,
           carbs: it.carbs,

@@ -12,6 +12,7 @@ import {
   sumMacros,
   calculateItemMacros,
   normalizeMacroNutrients,
+  normalizeItem,
   type ReviewItem,
 } from "@/src/lib/nutrition";
 import MealTypePicker from "./MealTypePicker";
@@ -35,22 +36,38 @@ export default function ReviewScreen({ draft: draftProp, initialRows = [], templ
   const [items, setItems] = useState<MealEditorItem[]>(() =>
     template
       ? template.meal.items.map((it, i) => {
-          const p100 = normalizeMacroNutrients(it.per100g);
-          const derived = calculateItemMacros(p100, it.grams);
-          return {
-            id: `tpl-${i}-${it.id}`,
+          const norm = normalizeItem({
             name: it.name,
             grams: it.grams,
-            per100g: p100,
-            calories: derived.calories,
-            protein: derived.protein_g,
-            carbs: derived.carbs_g,
-            fat: derived.fat_g,
+            per_100g: it.per_100g,
+            unit_type: it.unit_type,
+          });
+          return {
+            id: `tpl-${i}-${it.id}`,
+            name: norm.name,
+            grams: norm.grams,
+            unit_type: norm.unit_type,
+            item_type: norm.item_type,
+            per_100g: norm.per_100g,
+            calories: norm.calories,
+            protein: norm.protein,
+            carbs: norm.carbs,
+            fat: norm.fat,
           };
         })
       : initialRows.map((r, i) => {
-      const p100 = normalizeMacroNutrients(r.food?.per100g);
-      const derived = calculateItemMacros(p100, r.grams);
+      const category = r.food?.category ?? r.parsed.category;
+      const unit_type =
+        r.food?.unit_type ?? r.parsed.unit_type ?? (category === "beverage" ? "ml" : "g");
+      const item_type = r.food?.item_type ?? r.parsed.item_type;
+      const norm = normalizeItem({
+        name: r.food?.name_ar || r.parsed.name_ar || r.parsed.name_en || r.food?.name_en || "صنف",
+        grams: r.grams,
+        per_100g: r.food?.per_100g,
+        unit_type,
+        item_type,
+        category,
+      });
 
       let badge: MealEditorItem["badge"] = undefined;
       if (!r.food) {
@@ -63,19 +80,21 @@ export default function ReviewScreen({ draft: draftProp, initialRows = [], templ
 
       return {
         id: r.key || `item-${i}`,
-        name: r.parsed.name_ar || r.parsed.name_en || r.food?.name_ar || r.food?.name_en || "صنف",
-        grams: r.grams,
-        per100g: p100,
-        calories: derived.calories,
-        protein: derived.protein_g,
-        carbs: derived.carbs_g,
-        fat: derived.fat_g,
+        name: norm.name,
+        grams: norm.grams,
+        unit_type: norm.unit_type,
+        item_type: norm.item_type,
+        per_100g: norm.per_100g,
+        calories: norm.calories,
+        protein: norm.protein,
+        carbs: norm.carbs,
+        fat: norm.fat,
         badge,
         originalFoodId: r.food && r.food.source === "db" ? r.food.id : null,
         reference_unit_g: r.food?.reference_unit_g ?? null,
         default_portion_g: r.food?.default_portion_g ?? null,
         portion_assumed: r.parsed.portion_assumed ?? false,
-        category: r.food?.category ?? r.parsed.category,
+        category,
       };
     }),
   );
@@ -104,7 +123,8 @@ export default function ReviewScreen({ draft: draftProp, initialRows = [], templ
         items.map((it) => ({
           name: it.name,
           grams: it.grams,
-          per100g: it.per100g,
+          unit_type: it.unit_type,
+          per_100g: it.per_100g,
           calories: it.calories,
           protein: it.protein,
           carbs: it.carbs,

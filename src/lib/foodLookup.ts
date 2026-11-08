@@ -3,6 +3,8 @@ import {
   normalizeMacroNutrients,
   createMacroNutrients,
   applyPlausibilityChecks,
+  cleanFoodNameForMatching,
+  passesMacroSanityGuard,
   type FoodNutrition,
 } from "./nutrition";
 import type {
@@ -11,7 +13,11 @@ import type {
   FoodState,
   MacroSource,
   FoodCategory,
+  MacroNutrients,
 } from "./ai/types";
+import { SFCT_SAUDI_FOODS } from "./data/sfctFoods";
+
+export { SFCT_SAUDI_FOODS };
 
 type Row = Record<string, unknown>;
 
@@ -21,12 +27,9 @@ export interface CuratedFoodEntry {
   name_en: string;
   category: FoodCategory;
   state: FoodState;
-  per_100g: {
-    calories: number;
-    protein_g: number;
-    carbs_g: number;
-    fat_g: number;
-  };
+  unit_type?: "g" | "ml";
+  item_type?: "countable" | "plated";
+  per_100g: MacroNutrients;
   default_portion_g: number;
   reference_unit_g: number;
   cal_range: [number, number];
@@ -37,10 +40,285 @@ export interface CuratedFoodEntry {
 }
 
 /**
- * Curated Saudi Traditional & Everyday Foods in-memory database.
- * Serves as instantaneous local fallback when offline or when DB lookup misses.
+ * Raw / plain staple components kept intact for composite dish decomposition
+ * (e.g. Kabsa Rice + Chicken) and everyday items not covered in SFCT.
  */
-export const CURATED_SAUDI_FOODS: CuratedFoodEntry[] = [
+export const STAPLE_SAUDI_FOODS: CuratedFoodEntry[] = [
+  // Core Unadulterated Staples (Eggs, Chicken, Whole Wheat Bread, Tuna, Oats, Milk, Whey, Diet Soda)
+  {
+    id: "curated-boiled-egg",
+    name_ar: "بيض مسلوق",
+    name_en: "Boiled Egg",
+    category: "meat_poultry",
+    state: "cooked",
+    item_type: "countable",
+    per_100g: { calories: 155, protein_g: 12.6, carbs_g: 1.1, fat_g: 10.6 },
+    default_portion_g: 50,
+    reference_unit_g: 250,
+    cal_range: [145, 165],
+    protein_range: [11.5, 13.5],
+    uncertainty_level: "low",
+    verification_notes: "USDA FoodData Central hard-boiled whole egg (1 large egg = 50g)",
+    aliases: [
+      "بيض مسلوق",
+      "بيضه مسلوقه",
+      "بيضة مسلوقة",
+      "بيض",
+      "بيضة",
+      "بيضتين مسلوق",
+      "boiled egg",
+      "boiled eggs",
+      "hard boiled egg",
+      "egg",
+      "eggs",
+    ],
+  },
+  {
+    id: "curated-fried-egg",
+    name_ar: "بيض مقلي / عيون / أومليت",
+    name_en: "Fried / Scrambled Egg",
+    category: "meat_poultry",
+    state: "cooked",
+    item_type: "countable",
+    per_100g: { calories: 196, protein_g: 13.6, carbs_g: 0.8, fat_g: 14.8 },
+    default_portion_g: 50,
+    reference_unit_g: 50,
+    cal_range: [180, 220],
+    protein_range: [12.5, 14.5],
+    uncertainty_level: "low",
+    verification_notes: "USDA FoodData Central fried whole egg",
+    aliases: ["بيض مقلي", "بيض عيون", "بيض اومليت", "أومليت", "بيض مخفوق", "fried egg", "scrambled eggs"],
+  },
+  {
+    id: "curated-chicken-cooked",
+    name_ar: "دجاج شواية",
+    name_en: "Rotisserie / Cooked Chicken",
+    category: "meat_poultry",
+    state: "cooked",
+    item_type: "plated",
+    per_100g: { calories: 215, protein_g: 26.0, carbs_g: 0.0, fat_g: 11.5 },
+    default_portion_g: 115,
+    reference_unit_g: 460,
+    cal_range: [195, 240],
+    protein_range: [24.0, 28.0],
+    uncertainty_level: "low",
+    verification_notes: "صافي اللحم المأكول بدون عظم (ربع دجاجة = 115g، نصف دجاجة = 230g، حبة دجاج كاملة = 460g)",
+    aliases: [
+      "دجاج شواية",
+      "دجاج شوايه",
+      "حبة دجاج شواية",
+      "حبة دجاج شوايه",
+      "نص دجاجة",
+      "نص دجاجه",
+      "نصف دجاجة",
+      "نصف دجاجه",
+      "ربع دجاجة",
+      "ربع دجاجه",
+      "نص حبة دجاج",
+      "نص حبة دجاج شواية",
+      "حبة دجاج",
+      "دجاج مشوي",
+      "دجاج مندي",
+      "دجاج مضغوط",
+      "دجاج كبسة",
+      "دجاج مسحب",
+      "لحم دجاج",
+      "دجاج مطبوخ",
+      "chicken",
+      "roasted chicken",
+      "grilled chicken",
+    ],
+  },
+  {
+    id: "curated-chicken-breast",
+    name_ar: "صدور دجاج مشوية / مسلوقة (صافي)",
+    name_en: "Cooked Chicken Breast (Skinless, Boneless)",
+    category: "meat_poultry",
+    state: "cooked",
+    item_type: "countable",
+    per_100g: { calories: 165, protein_g: 31.0, carbs_g: 0, fat_g: 3.6 },
+    default_portion_g: 150,
+    reference_unit_g: 150,
+    cal_range: [155, 175],
+    protein_range: [29.0, 32.5],
+    uncertainty_level: "low",
+    verification_notes: "USDA FoodData Central cooked chicken breast",
+    aliases: [
+      "صدور دجاج",
+      "صدر دجاج",
+      "صدور دجاج مشوية",
+      "صدر دجاج مشوي",
+      "صدور دجاج مسلوقة",
+      "chicken breast",
+      "grilled chicken breast",
+    ],
+  },
+  {
+    id: "curated-brown-bread",
+    name_ar: "خبز بر / أسمر",
+    name_en: "Whole Wheat Flatbread (Khobzet / Brown Bread)",
+    category: "bread_pastry",
+    state: "ready_to_eat",
+    item_type: "countable",
+    per_100g: { calories: 247, protein_g: 13.0, carbs_g: 41.0, fat_g: 3.4 },
+    default_portion_g: 90,
+    reference_unit_g: 90,
+    cal_range: [235, 265],
+    protein_range: [11.0, 14.0],
+    uncertainty_level: "low",
+    verification_notes: "USDA / SFDA whole wheat Arabic bread (1 loaf = 90g)",
+    aliases: [
+      "خبز بر",
+      "رغيف خبز بر",
+      "خبز بر رغيف",
+      "خبز اسمر",
+      "خبز أسمر",
+      "عيش بر",
+      "عيش اسمر",
+      "خبز قمح كامل",
+      "brown bread",
+      "whole wheat bread",
+    ],
+  },
+  {
+    id: "curated-tuna-water",
+    name_ar: "تونة بالماء (مصفاة)",
+    name_en: "Canned Tuna in Water (Drained)",
+    category: "meat_poultry",
+    state: "ready_to_eat",
+    item_type: "countable",
+    per_100g: { calories: 116, protein_g: 25.5, carbs_g: 0.0, fat_g: 0.8 },
+    default_portion_g: 100,
+    reference_unit_g: 100,
+    cal_range: [105, 130],
+    protein_range: [23.0, 27.0],
+    uncertainty_level: "low",
+    verification_notes: "علبة صغيرة: 60g، علبة وسط: 100g، علبة كبيرة: 130g",
+    aliases: [
+      "تونة",
+      "تونه",
+      "علبة تونة",
+      "علبه تونه",
+      "تونة بالماء",
+      "تونه بالماء",
+      "علبة تونة بالماء",
+      "علبه تونه بالماء",
+      "tuna in water",
+      "canned tuna in water",
+      "tuna",
+      "canned tuna",
+    ],
+  },
+  {
+    id: "curated-tuna-oil",
+    name_ar: "تونة بالزيت (مصفاة)",
+    name_en: "Canned Tuna in Oil (Drained)",
+    category: "meat_poultry",
+    state: "ready_to_eat",
+    item_type: "countable",
+    per_100g: { calories: 198, protein_g: 26.5, carbs_g: 0.0, fat_g: 10.2 },
+    default_portion_g: 100,
+    reference_unit_g: 100,
+    cal_range: [180, 220],
+    protein_range: [24.0, 28.0],
+    uncertainty_level: "low",
+    verification_notes: "علبة صغيرة: 60g، علبة وسط: 100g، علبة كبيرة: 130g",
+    aliases: [
+      "تونة بالزيت",
+      "تونه بالزيت",
+      "علبة تونة بالزيت",
+      "علبه تونه بالزيت",
+      "tuna in oil",
+      "canned tuna in oil",
+    ],
+  },
+  {
+    id: "curated-diet-pepsi",
+    name_ar: "بيبسي دايت",
+    name_en: "Diet Pepsi",
+    category: "beverage",
+    unit_type: "ml",
+    item_type: "countable",
+    state: "ready_to_eat",
+    per_100g: { calories: 0, protein_g: 0.0, carbs_g: 0.0, fat_g: 0.0 },
+    default_portion_g: 330,
+    reference_unit_g: 330,
+    cal_range: [0, 2],
+    protein_range: [0, 0],
+    uncertainty_level: "low",
+    verification_notes: "330ml can zero calorie soda",
+    aliases: [
+      "بيبسي دايت",
+      "ببسي دايت",
+      "دايت بيبسي",
+      "diet pepsi",
+      "pepsi diet",
+      "بيبسي زيرو",
+      "كولا دايت",
+      "كولا زيرو",
+      "diet cola",
+      "coca cola zero",
+    ],
+  },
+  {
+    id: "curated-oats",
+    name_ar: "شوفان (خام / حبوب كاملة)",
+    name_en: "Rolled Oats",
+    category: "rice_grain",
+    state: "raw",
+    item_type: "countable",
+    per_100g: { calories: 379, protein_g: 13.2, carbs_g: 67.7, fat_g: 6.5 },
+    default_portion_g: 40,
+    reference_unit_g: 40,
+    cal_range: [365, 390],
+    protein_range: [12.0, 14.5],
+    uncertainty_level: "low",
+    verification_notes: "USDA FoodData Central rolled oats",
+    aliases: ["شوفان", "حبوب شوفان", "شوفان كويكر", "oats", "rolled oats", "oatmeal"],
+  },
+  {
+    id: "curated-milk-full",
+    name_ar: "حليب طازج كامل الدسم",
+    name_en: "Whole Milk",
+    category: "dairy_egg",
+    unit_type: "ml",
+    state: "ready_to_eat",
+    item_type: "plated",
+    per_100g: { calories: 61, protein_g: 3.2, carbs_g: 4.8, fat_g: 3.3 },
+    default_portion_g: 250,
+    reference_unit_g: 250,
+    cal_range: [58, 65],
+    protein_range: [3.0, 3.5],
+    uncertainty_level: "low",
+    verification_notes: "USDA / SFDA whole cow milk",
+    aliases: ["حليب", "حليب كامل الدسم", "كوب حليب", "حليب طازج", "milk", "whole milk"],
+  },
+  {
+    id: "curated-whey-protein",
+    name_ar: "واي بروتين (مسحوق بروتين)",
+    name_en: "Whey Protein Isolate / Powder",
+    category: "other",
+    state: "ready_to_eat",
+    item_type: "countable",
+    per_100g: { calories: 400, protein_g: 90.0, carbs_g: 3.3, fat_g: 3.3 },
+    default_portion_g: 30,
+    reference_unit_g: 30,
+    cal_range: [370, 415],
+    protein_range: [80.0, 92.0],
+    uncertainty_level: "low",
+    verification_notes: "Standard 30g scoop = 27g protein",
+    aliases: [
+      "واي بروتين",
+      "بروتين",
+      "سكوب بروتين",
+      "سكوبين بروتين",
+      "بودرة بروتين",
+      "whey protein",
+      "protein scoop",
+      "protein shake",
+    ],
+  },
+
   // Breads & Pastries
   {
     id: "curated-tamees-plain",
@@ -48,6 +326,7 @@ export const CURATED_SAUDI_FOODS: CuratedFoodEntry[] = [
     name_en: "Plain Tamees Bread",
     category: "bread_pastry",
     state: "ready_to_eat",
+    item_type: "plated",
     per_100g: { calories: 275, protein_g: 8.5, carbs_g: 54, fat_g: 2.5 },
     default_portion_g: 90,
     reference_unit_g: 360,
@@ -63,6 +342,7 @@ export const CURATED_SAUDI_FOODS: CuratedFoodEntry[] = [
     name_en: "Cheese Tamees Bread",
     category: "bread_pastry",
     state: "ready_to_eat",
+    item_type: "plated",
     per_100g: { calories: 310, protein_g: 11, carbs_g: 46, fat_g: 9 },
     default_portion_g: 110,
     reference_unit_g: 440,
@@ -78,6 +358,7 @@ export const CURATED_SAUDI_FOODS: CuratedFoodEntry[] = [
     name_en: "Ghee / Biscuit Tamees Bread",
     category: "bread_pastry",
     state: "ready_to_eat",
+    item_type: "plated",
     per_100g: { calories: 340, protein_g: 8, carbs_g: 52, fat_g: 11 },
     default_portion_g: 95,
     reference_unit_g: 380,
@@ -93,6 +374,7 @@ export const CURATED_SAUDI_FOODS: CuratedFoodEntry[] = [
     name_en: "Samoli Bread Roll",
     category: "bread_pastry",
     state: "ready_to_eat",
+    item_type: "countable",
     per_100g: { calories: 275, protein_g: 8.3, carbs_g: 51.7, fat_g: 3.3 },
     default_portion_g: 60,
     reference_unit_g: 60,
@@ -108,6 +390,7 @@ export const CURATED_SAUDI_FOODS: CuratedFoodEntry[] = [
     name_en: "Arabic Flatbread (Mafrood)",
     category: "bread_pastry",
     state: "ready_to_eat",
+    item_type: "countable",
     per_100g: { calories: 275, protein_g: 8.3, carbs_g: 55, fat_g: 1.7 },
     default_portion_g: 60,
     reference_unit_g: 60,
@@ -117,44 +400,15 @@ export const CURATED_SAUDI_FOODS: CuratedFoodEntry[] = [
     verification_notes: "SFDA / Saudi MOH nutrition tables",
     aliases: ["خبز مفرود", "خبز عربي", "عيش مفرود", "خبز ابيض", "pita"],
   },
-  {
-    id: "curated-mutabbaq",
-    name_ar: "مطبق مالح (لحم/بيض/كراث)",
-    name_en: "Savory Mutabbaq (Meat & Egg)",
-    category: "bread_pastry",
-    state: "ready_to_eat",
-    per_100g: { calories: 230, protein_g: 9, carbs_g: 24, fat_g: 11 },
-    default_portion_g: 180,
-    reference_unit_g: 360,
-    cal_range: [195, 270],
-    protein_range: [7, 11],
-    uncertainty_level: "high",
-    verification_notes: "SFDA / Saudi MOH nutrition tables",
-    aliases: ["مطبق", "مطبق مالح", "مطبق لحم", "mutabbaq"],
-  },
-  {
-    id: "curated-masoob",
-    name_ar: "معصوب (عادي بالموز والقشطة)",
-    name_en: "Masoob (Banana & Cream)",
-    category: "bread_pastry",
-    state: "ready_to_eat",
-    per_100g: { calories: 260, protein_g: 5, carbs_g: 36, fat_g: 11 },
-    default_portion_g: 250,
-    reference_unit_g: 500,
-    cal_range: [220, 320],
-    protein_range: [4, 6.5],
-    uncertainty_level: "high",
-    verification_notes: "SFDA / Saudi MOH nutrition tables",
-    aliases: ["معصوب", "معصوب بالقشطة", "معصوب موز", "masoob"],
-  },
 
-  // Cooked Rice & Traditional Dishes
+  // Cooked Rice & Grains (Staples)
   {
     id: "curated-kabsa-rice",
     name_ar: "أرز كبسة / مضغوط (مطبوخ بدون اللحم)",
     name_en: "Cooked Kabsa / Madghoot Rice",
     category: "rice_grain",
     state: "cooked",
+    item_type: "plated",
     per_100g: { calories: 155, protein_g: 3, carbs_g: 30, fat_g: 2.5 },
     default_portion_g: 250,
     reference_unit_g: 250,
@@ -170,6 +424,7 @@ export const CURATED_SAUDI_FOODS: CuratedFoodEntry[] = [
     name_en: "Cooked Plain White / Peshawari Rice",
     category: "rice_grain",
     state: "cooked",
+    item_type: "plated",
     per_100g: { calories: 130, protein_g: 2.7, carbs_g: 28, fat_g: 0.3 },
     default_portion_g: 220,
     reference_unit_g: 220,
@@ -185,6 +440,7 @@ export const CURATED_SAUDI_FOODS: CuratedFoodEntry[] = [
     name_en: "Cooked Bukhari / Mandi Rice",
     category: "rice_grain",
     state: "cooked",
+    item_type: "plated",
     per_100g: { calories: 165, protein_g: 3, carbs_g: 31, fat_g: 3.2 },
     default_portion_g: 250,
     reference_unit_g: 250,
@@ -192,103 +448,17 @@ export const CURATED_SAUDI_FOODS: CuratedFoodEntry[] = [
     protein_range: [2.5, 3.5],
     uncertainty_level: "medium",
     verification_notes: "USDA / SFDA",
-    aliases: ["رز بخاري", "رز مندي", "أرز بخاري", "أرز مندي", "ارز بخاري"],
-  },
-  {
-    id: "curated-jareesh",
-    name_ar: "جريش",
-    name_en: "Jareesh (Cracked Wheat)",
-    category: "traditional_dish",
-    state: "cooked",
-    per_100g: { calories: 135, protein_g: 4.5, carbs_g: 21, fat_g: 3.5 },
-    default_portion_g: 250,
-    reference_unit_g: 250,
-    cal_range: [115, 165],
-    protein_range: [3.5, 5.5],
-    uncertainty_level: "high",
-    verification_notes: "SFDA / Saudi MOH nutrition tables",
-    aliases: ["جريش", "الجريش", "جريش احمر", "جريش ابيض", "jareesh"],
-  },
-  {
-    id: "curated-qursan",
-    name_ar: "قرصان بالخضار واللحم",
-    name_en: "Qursan with Vegetables",
-    category: "traditional_dish",
-    state: "cooked",
-    per_100g: { calories: 145, protein_g: 6, carbs_g: 20, fat_g: 4.5 },
-    default_portion_g: 250,
-    reference_unit_g: 250,
-    cal_range: [120, 175],
-    protein_range: [4.5, 7.5],
-    uncertainty_level: "high",
-    verification_notes: "SFDA / Saudi MOH nutrition tables",
-    aliases: ["قرصان", "القرصان", "qursan"],
-  },
-  {
-    id: "curated-saleeg",
-    name_ar: "سليق (أرز بالحليب بدون الدجاج)",
-    name_en: "Saleeg Rice (without Chicken)",
-    category: "traditional_dish",
-    state: "cooked",
-    per_100g: { calories: 150, protein_g: 4, carbs_g: 24, fat_g: 4 },
-    default_portion_g: 250,
-    reference_unit_g: 250,
-    cal_range: [130, 180],
-    protein_range: [3.2, 5],
-    uncertainty_level: "high",
-    verification_notes: "SFDA / Saudi MOH nutrition tables",
-    aliases: ["سليق", "سليق طائفي", "رز سليق", "saleeg"],
-  },
-  {
-    id: "curated-margoog",
-    name_ar: "مرقوق",
-    name_en: "Margoog",
-    category: "traditional_dish",
-    state: "cooked",
-    per_100g: { calories: 140, protein_g: 5.5, carbs_g: 21, fat_g: 4 },
-    default_portion_g: 250,
-    reference_unit_g: 250,
-    cal_range: [115, 170],
-    protein_range: [4, 7],
-    uncertainty_level: "high",
-    verification_notes: "SFDA / Saudi MOH nutrition tables",
-    aliases: ["مرقوق", "المرقوق", "margoog"],
+    aliases: ["رز بخاري", "رز مندي", "أرز بخاري", "أرز مندي", "ارز بخاري", "صحن رز بخاري"],
   },
 
   // Cooked Poultry & Meats (Edible Meat Only, Boneless)
-  {
-    id: "curated-chicken-cooked",
-    name_ar: "دجاج شواية / مضغوط / مندي / كبسة (صافي اللحم المأكول بدون العظم)",
-    name_en: "Cooked Chicken Meat (Boneless / Edible)",
-    category: "meat_poultry",
-    state: "cooked",
-    per_100g: { calories: 215, protein_g: 26, carbs_g: 0, fat_g: 11.5 },
-    default_portion_g: 115,
-    reference_unit_g: 460,
-    cal_range: [195, 240],
-    protein_range: [24, 28],
-    uncertainty_level: "low",
-    verification_notes: "USDA FoodData Central roasted chicken meat",
-    aliases: [
-      "دجاج كبسة",
-      "دجاج شواية",
-      "دجاج مندي",
-      "دجاج مضغوط",
-      "دجاج مسحب",
-      "دجاج مشوي",
-      "نص حبة دجاج",
-      "ربع دجاجة",
-      "حبة دجاج",
-      "لحم دجاج",
-      "دجاج مطبوخ",
-    ],
-  },
   {
     id: "curated-lamb-cooked",
     name_ar: "لحم غنم / حاشي مطبوخ (صافي بدون عظم)",
     name_en: "Cooked Lamb / Camel Meat (Boneless)",
     category: "meat_poultry",
     state: "cooked",
+    item_type: "plated",
     per_100g: { calories: 270, protein_g: 25, carbs_g: 0, fat_g: 19 },
     default_portion_g: 100,
     reference_unit_g: 400,
@@ -306,6 +476,7 @@ export const CURATED_SAUDI_FOODS: CuratedFoodEntry[] = [
     name_en: "Foul Mudammas / Qallaba",
     category: "legume",
     state: "cooked",
+    item_type: "plated",
     per_100g: { calories: 115, protein_g: 7, carbs_g: 16, fat_g: 2.5 },
     default_portion_g: 200,
     reference_unit_g: 200,
@@ -321,6 +492,7 @@ export const CURATED_SAUDI_FOODS: CuratedFoodEntry[] = [
     name_en: "Cooked Lentils / Dal",
     category: "legume",
     state: "cooked",
+    item_type: "plated",
     per_100g: { calories: 125, protein_g: 7.5, carbs_g: 18, fat_g: 2.5 },
     default_portion_g: 200,
     reference_unit_g: 200,
@@ -336,6 +508,7 @@ export const CURATED_SAUDI_FOODS: CuratedFoodEntry[] = [
     name_en: "Baked / Air-Fried Sambusa",
     category: "snack_fastfood",
     state: "cooked",
+    item_type: "countable",
     per_100g: { calories: 238, protein_g: 12.5, carbs_g: 27.5, fat_g: 8.8 },
     default_portion_g: 40,
     reference_unit_g: 40,
@@ -351,6 +524,7 @@ export const CURATED_SAUDI_FOODS: CuratedFoodEntry[] = [
     name_en: "Fried Sambusa",
     category: "snack_fastfood",
     state: "cooked",
+    item_type: "countable",
     per_100g: { calories: 338, protein_g: 11.3, carbs_g: 27.5, fat_g: 20 },
     default_portion_g: 40,
     reference_unit_g: 40,
@@ -366,6 +540,7 @@ export const CURATED_SAUDI_FOODS: CuratedFoodEntry[] = [
     name_en: "Regular Chicken Shawarma (Small Pita)",
     category: "snack_fastfood",
     state: "ready_to_eat",
+    item_type: "countable",
     per_100g: { calories: 227, protein_g: 13.3, carbs_g: 20, fat_g: 10 },
     default_portion_g: 150,
     reference_unit_g: 150,
@@ -381,6 +556,7 @@ export const CURATED_SAUDI_FOODS: CuratedFoodEntry[] = [
     name_en: "Large Sarookh / Saj Chicken Shawarma",
     category: "snack_fastfood",
     state: "ready_to_eat",
+    item_type: "countable",
     per_100g: { calories: 229, protein_g: 12.5, carbs_g: 19.6, fat_g: 10.7 },
     default_portion_g: 280,
     reference_unit_g: 280,
@@ -396,6 +572,7 @@ export const CURATED_SAUDI_FOODS: CuratedFoodEntry[] = [
     name_en: "Dates (Sukari / Khalas / Sagai)",
     category: "fruit_dates",
     state: "ready_to_eat",
+    item_type: "countable",
     per_100g: { calories: 282, protein_g: 2, carbs_g: 75, fat_g: 0.4 },
     default_portion_g: 30,
     reference_unit_g: 30,
@@ -405,6 +582,16 @@ export const CURATED_SAUDI_FOODS: CuratedFoodEntry[] = [
     verification_notes: "USDA FoodData Central / SFDA date palms",
     aliases: ["تمر", "رطب", "تمر سكري", "تمر خلاص", "تمر صقعي", "dates"],
   },
+];
+
+/**
+ * Curated Saudi Traditional & Everyday Foods in-memory database.
+ * Pinned unadulterated staples are placed FIRST so basic foods (e.g. "بيض مسلوق", "خبز بر",
+ * "صدور دجاج") never fall through to composite SFCT dishes (like "بلاليط بالبيض").
+ */
+export const CURATED_SAUDI_FOODS: CuratedFoodEntry[] = [
+  ...STAPLE_SAUDI_FOODS,
+  ...SFCT_SAUDI_FOODS,
 ];
 
 /** Normalize Arabic: unify alef forms, ta marbuta, alef maqsura; strip diacritics/tatweel. */
@@ -439,12 +626,31 @@ function toFood(row: Row): FoodNutrition {
     name_ar: String(row.name_ar ?? ""),
     name_en: String(row.name_en ?? ""),
     source: "db",
-    per100g: normalizeMacroNutrients(p),
+    per_100g: normalizeMacroNutrients(p),
     category: row.category as FoodCategory | undefined,
+    unit_type: (row.unit_type as "g" | "ml" | undefined) || (row.category === "beverage" ? "ml" : "g"),
+    item_type: row.item_type as "countable" | "plated" | undefined,
     default_portion_g: defPortion,
     reference_unit_g: refUnit,
     uncertainty_level: (row.uncertainty_level as "low" | "medium" | "high") || "medium",
     verification_notes: row.verification_notes ? String(row.verification_notes) : undefined,
+  };
+}
+
+export function curatedToFood(entry: CuratedFoodEntry): FoodNutrition {
+  return {
+    id: entry.id,
+    name_ar: entry.name_ar,
+    name_en: entry.name_en,
+    source: "db",
+    per_100g: normalizeMacroNutrients(entry.per_100g),
+    category: entry.category,
+    unit_type: entry.unit_type || (entry.category === "beverage" ? "ml" : "g"),
+    item_type: entry.item_type,
+    default_portion_g: entry.default_portion_g,
+    reference_unit_g: entry.reference_unit_g,
+    uncertainty_level: entry.uncertainty_level,
+    verification_notes: entry.verification_notes,
   };
 }
 
@@ -454,57 +660,270 @@ const clean = (s: string) => s.replace(/[%_,(){}"\\*:]/g, " ").replace(/\s+/g, "
 const aliasesOf = (row: Row): string[] =>
   Array.isArray(row.aliases) ? (row.aliases as unknown[]).map(String) : [];
 
-/** Search in-memory curated dataset when Supabase query is empty or offline */
-export function searchCuratedFallback(term: string): FoodNutrition | null {
-  const norm = normalizeArabic(clean(term)).toLowerCase();
-  if (!norm || norm.length < 2) return null;
+/**
+ * Generic descriptor words (cooking method / state / filler). Matching on these alone
+ * pulls in unrelated foods (e.g. "مطبوخ" matching cooked lamb for a rice item).
+ */
+const GENERIC_WORDS = new Set(
+  [
+    "مطبوخ", "مسلوق", "مشوي", "مقلي", "مطبوخه", "مسلوقه", "مشويه", "مقليه",
+    "عادي", "عاديه", "صافي", "بدون", "اللحم", "المأكول", "الماكول", "العظم",
+    "طازج", "كامل", "الدسم", "محمر", "مبهر", "ساده", "سادة",
+    "cooked", "boiled", "fried", "grilled", "baked", "raw", "fresh", "plain", "with", "without",
+    "and", "the", "ready", "eat", "edible", "boneless", "meat", "regular",
+  ].map((w) => normalizeArabic(w).toLowerCase()),
+);
 
-  let bestEntry: CuratedFoodEntry | null = null;
-  let bestScore = -1;
+/**
+ * Primary dish/ingredient nouns that MUST NOT appear in a candidate if they are absent
+ * from the query (e.g. prevents "بيض" or "بيض مسلوق" from matching "بلاليط بالبيض").
+ */
+const CONFLICTING_DISH_NOUNS = [
+  "بلاليط",
+  "شعيريه",
+  "مطبق",
+  "معصوب",
+  "عريكه",
+  "مرقوق",
+  "جريش",
+  "قرصان",
+  "سليق",
+  "فته",
+  "فطيره",
+  "كيك",
+  "كنافه",
+  "بسبوسه",
+  "سمبوسه",
+  "شاورما",
+  "برجر",
+  "بيتزا",
+  "مكرونه",
+  "باستا",
+  "شكشوكه",
+  "كليجا",
+  "لقيمات",
+  "حنيني",
+  "عصيده",
+  "مصابيب",
+  "مراصيع",
+  "ثريد",
+  "هريس",
+  "مفطح",
+  "كشري",
+  "بليله",
+  "بصاره",
+  "شوفان",
+  "حليب",
+  "عدس",
+  "فول",
+].map((w) => normalizeArabic(w).toLowerCase());
 
-  for (const entry of CURATED_SAUDI_FOODS) {
-    const names = [entry.name_ar, entry.name_en, ...entry.aliases].map((n) =>
-      normalizeArabic(n).toLowerCase(),
-    );
+/** Extract distinctive non-generic tokens (length >= 2) from a normalized string */
+function getDistinctiveTokens(normStr: string): string[] {
+  return normStr
+    .replace(/[^\u0600-\u06FFa-z0-9\s]/gi, " ")
+    .split(/\s+/)
+    .map((w) => w.replace(/^ال/, "").trim())
+    .filter((w) => w.length >= 2 && !GENERIC_WORDS.has(w));
+}
 
-    let currentScore = 0;
-    if (names.some((n) => n === norm)) {
-      currentScore = 100;
-    } else if (names.some((n) => n.includes(norm) || norm.includes(n))) {
-      currentScore = 70;
-    } else {
-      const normWords = norm.split(" ").filter((w) => w.length >= 3);
-      for (const w of normWords) {
-        if (names.some((n) => n.includes(w))) {
-          currentScore = Math.max(currentScore, 40);
-        }
-      }
+/** Check if candidate introduces any conflicting dish noun not present in the query */
+function hasConflictingNoun(queryNorm: string, candidateNorm: string): boolean {
+  for (const noun of CONFLICTING_DISH_NOUNS) {
+    if (candidateNorm.includes(noun) && !queryNorm.includes(noun)) {
+      return true;
     }
+  }
+  return false;
+}
 
-    if (currentScore > bestScore) {
-      bestScore = currentScore;
-      bestEntry = entry;
+/**
+ * 4-Tier Strict Search Ranking:
+ * 1. Exact normalized match on primary name (`name_ar` / `name_en`) -> 100
+ * 2. Exact normalized match in `aliases` -> 95
+ * 3. Full phrase containment (ONLY if candidate doesn't add conflicting food nouns) -> 75
+ * 4. All distinctive tokens match (ONLY if candidate doesn't add conflicting nouns or unrelated primary tokens) -> 60
+ * Never match on a single shared token if the candidate has other primary ingredient tokens!
+ */
+function scoreCandidateStrict(
+  primaryNames: string[],
+  aliases: string[],
+  rawQuery: string,
+): number {
+  const cleanedQuery = cleanFoodNameForMatching(rawQuery) || rawQuery;
+  const qNorm = normalizeArabic(clean(cleanedQuery)).toLowerCase();
+  const qRawNorm = normalizeArabic(clean(rawQuery)).toLowerCase();
+  if (!qNorm || qNorm.length < 2) return 0;
+
+  const normPrimary = primaryNames
+    .map((n) => normalizeArabic(clean(n)).toLowerCase())
+    .filter(Boolean);
+  const normAliases = aliases
+    .map((n) => normalizeArabic(clean(n)).toLowerCase())
+    .filter(Boolean);
+  const allNames = [...normPrimary, ...normAliases];
+
+  // Tier 1: Exact normalized match on primary name
+  if (normPrimary.some((n) => n === qNorm || n === qRawNorm)) {
+    return 100;
+  }
+
+  // Tier 2: Exact normalized match in aliases
+  if (normAliases.some((n) => n === qNorm || n === qRawNorm)) {
+    return 95;
+  }
+
+  // Also check primary name with parenthetical clarifications stripped
+  const strippedPrimary = normPrimary.map((n) =>
+    n.replace(/\s*\([^)]*\)/g, "").replace(/\s*\/.*$/, "").trim(),
+  );
+  if (strippedPrimary.some((n) => n === qNorm || n === qRawNorm)) {
+    return 92;
+  }
+
+  // Tier 3: Full phrase containment (ONLY if candidate has no conflicting dish nouns)
+  for (const cand of allNames) {
+    if (hasConflictingNoun(qNorm, cand)) continue;
+    if (cand.includes(qNorm) || (cand.length >= 4 && qNorm.includes(cand))) {
+      // Ensure all distinctive query tokens are in the candidate
+      const qTokens = getDistinctiveTokens(qNorm);
+      const cTokens = getDistinctiveTokens(cand);
+      if (qTokens.length > 0 && qTokens.every((qt) => cand.includes(qt))) {
+        // Reject if query is a single token (e.g. "بيض") and candidate has multiple unrelated tokens (e.g. "بلاليط بالبيض")
+        if (qTokens.length === 1 && cTokens.length > 2) {
+          continue;
+        }
+        return 75 - Math.min(cand.length, 40) / 10;
+      }
     }
   }
 
-  if (bestEntry && bestScore >= 40) {
-    return {
-      id: bestEntry.id,
-      name_ar: bestEntry.name_ar,
-      name_en: bestEntry.name_en,
-      source: "db",
-      per100g: createMacroNutrients(
-        bestEntry.per_100g.calories,
-        bestEntry.per_100g.protein_g,
-        bestEntry.per_100g.carbs_g,
-        bestEntry.per_100g.fat_g,
-      ),
-      category: bestEntry.category,
-      default_portion_g: bestEntry.default_portion_g,
-      reference_unit_g: bestEntry.reference_unit_g,
-      uncertainty_level: bestEntry.uncertainty_level,
-      verification_notes: bestEntry.verification_notes,
-    };
+  // Tier 4: All distinctive tokens match (never match on a single shared token if candidate has other primary tokens)
+  const qTokens = getDistinctiveTokens(qNorm);
+  if (qTokens.length === 0) return 0;
+
+  for (const cand of allNames) {
+    if (hasConflictingNoun(qNorm, cand)) continue;
+    const cTokens = getDistinctiveTokens(cand);
+    if (cTokens.length === 0) continue;
+
+    const allQueryTokensPresent = qTokens.every((qt) =>
+      cTokens.some((ct) => ct === qt || ct.includes(qt) || qt.includes(ct)),
+    );
+    if (!allQueryTokensPresent) continue;
+
+    // Never match on a single token if candidate has other primary ingredient tokens
+    if (qTokens.length === 1 && cTokens.length > 1) {
+      continue;
+    }
+
+    // Extra tokens in candidate must be at most 1
+    if (cTokens.length - qTokens.length <= 1) {
+      return 60 - (cTokens.length - qTokens.length) * 5;
+    }
+  }
+
+  return 0;
+}
+
+/**
+ * Normalize query by stripping container, size, and cooking state words.
+ */
+export function normalizeQuery(q: string): string {
+  return (q ?? "")
+    .replace(/[\u064B-\u065F\u0670\u0640]/g, "")
+    .replace(/[أإآ]/g, "ا")
+    .replace(/ة/g, "ه")
+    .replace(/ى/g, "ي")
+    .replace(/[\u0660-\u0669]/g, (d) => String(d.charCodeAt(0) - 0x0660))
+    .replace(/(?<![A-Za-z0-9\u0600-\u06FF])(?:\d+(?:\.\d+)?\s*)?(?:علبه|علبة|علب|صحن|كوب|حبه|حبة|حبات|حبتين|رغيف|رغيفين|قطعه|قطعة|قطع|قطعتين|شريحه|شريحة|شرائح)(?![A-Za-z0-9\u0600-\u06FF])/gi, " ")
+    .replace(/(?<![A-Za-z0-9\u0600-\u06FF])(?:اكلت|شربت|تناولت|اخذت)(?![A-Za-z0-9\u0600-\u06FF])/gi, " ")
+    .replace(/(?<![A-Za-z0-9\u0600-\u06FF])(?:صغير|صغيره|صغيرة|كبير|كبيره|كبيرة|وسط|متوسط|متوسطه|متوسطة)(?![A-Za-z0-9\u0600-\u06FF])/gi, " ")
+    .replace(/(?<![A-Za-z0-9\u0600-\u06FF])(?:معلب|معلبه|معلبة|طازج|طازجه|طازجة|صافي|صافيه|صافية)(?![A-Za-z0-9\u0600-\u06FF])/gi, " ")
+    .replace(/(?<![A-Za-z0-9\u0600-\u06FF])(?:واحد|واحده|واحدة|اثنين|اثنان|ثلاث|ثلاثه|ثلاثة|اربع|اربعه|اربعة|خمس|خمسه|خمسة)(?![A-Za-z0-9\u0600-\u06FF])/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+const BRAND_KEYWORDS = /(?<![A-Za-z0-9\u0600-\u06FF])(?:المراعي|نادك|الصافي|بلدنا|كويكر|أوبتيموم|بروتين بار|نستله|لونا|أبو قوس|ابو قوس|almarai|nadec|optimum|quest|protein bar|nestle)(?![A-Za-z0-9\u0600-\u06FF])/i;
+
+/**
+ * Step 1 Priority Check: Check pinned unadulterated staples (`STAPLE_SAUDI_FOODS`)
+ * for EXACT match only (full phrase or exact alias after normalizeQuery).
+ * Bypassed when query contains a brand keyword or OCR label card.
+ */
+export function matchPinnedStaple(queryAr?: string, queryEn?: string): FoodNutrition | null {
+  const queries = [queryAr, queryEn].filter((q): q is string => Boolean(q && q.trim()));
+  if (queries.length === 0) return null;
+
+  for (const q of queries) {
+    if (BRAND_KEYWORDS.test(q)) {
+      return null; // Bypasses pinned staples for branded / packaged products
+    }
+
+    const qNorm = normalizeQuery(q);
+    const qClean = normalizeArabic(clean(q)).toLowerCase();
+    if (!qNorm && !qClean) continue;
+
+    for (const entry of STAPLE_SAUDI_FOODS) {
+      const primaryAr = normalizeArabic(entry.name_ar).toLowerCase();
+      const primaryEn = entry.name_en.toLowerCase();
+      const primaryArStripped = primaryAr.replace(/\s*\([^)]*\)/g, "").replace(/\s*\/.*$/, "").trim();
+      const aliases = entry.aliases.map((a) => normalizeArabic(a).toLowerCase());
+
+      const isExactMatch =
+        primaryAr === qNorm ||
+        primaryAr === qClean ||
+        primaryArStripped === qNorm ||
+        primaryArStripped === qClean ||
+        primaryEn === qNorm ||
+        primaryEn === qClean ||
+        aliases.includes(qNorm) ||
+        aliases.includes(qClean);
+
+      if (isExactMatch) {
+        const candidate = curatedToFood(entry);
+        if (passesMacroSanityGuard(q, candidate.per_100g, candidate.category)) {
+          return candidate;
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+/** Search in-memory curated dataset when Supabase query is empty or offline */
+export function searchCuratedFallback(term: string): FoodNutrition | null {
+  const cleanedTerm = cleanFoodNameForMatching(term) || term;
+  const norm = normalizeArabic(clean(cleanedTerm)).toLowerCase();
+  if (!norm || norm.length < 2) return null;
+
+  // 1. Check pinned staples first
+  const pinned = matchPinnedStaple(term);
+  if (pinned) return pinned;
+
+  // 2. Strict 4-tier search across CURATED_SAUDI_FOODS + Macro Sanity Guard
+  let bestEntry: CuratedFoodEntry | null = null;
+  let bestScore = 0;
+
+  for (const entry of CURATED_SAUDI_FOODS) {
+    const currentScore = scoreCandidateStrict(
+      [entry.name_ar, entry.name_en],
+      entry.aliases,
+      term,
+    );
+    if (currentScore > bestScore) {
+      if (passesMacroSanityGuard(term, entry.per_100g, entry.category)) {
+        bestScore = currentScore;
+        bestEntry = entry;
+      }
+    }
+  }
+
+  if (bestEntry && bestScore >= 55) {
+    return curatedToFood(bestEntry);
   }
 
   return null;
@@ -543,14 +962,13 @@ async function search(term: string): Promise<Row[]> {
   }
 }
 
-/** Score a row against the normalized search term (higher is better). */
-function score(row: Row, normalizedTerm: string): number {
-  const names = [String(row.name_ar ?? ""), String(row.name_en ?? ""), ...aliasesOf(row)].map(
-    normalizeArabic,
+/** Score a Supabase row against the search term using 4-Tier Strict Ranking. */
+function score(row: Row, rawTerm: string): number {
+  return scoreCandidateStrict(
+    [String(row.name_ar ?? ""), String(row.name_en ?? "")],
+    aliasesOf(row),
+    rawTerm,
   );
-  if (names.some((n) => n.toLowerCase() === normalizedTerm.toLowerCase())) return 100;
-  if (names.some((n) => n.includes(normalizedTerm))) return 50 - Math.min(names[0].length, 40) / 10;
-  return 10 - Math.min(names[0].length, 40) / 10;
 }
 
 /** Build a food from the AI's own per-100g estimate (used strictly when no match in DB). */
@@ -559,21 +977,45 @@ function foodFromAi(
 ): FoodNutrition | null {
   const e = item.ai_fallback_per_100g || item.ai_estimated_per_100g;
   if (!e) return null;
+  const per_100g = normalizeMacroNutrients(e);
   return {
     id: `ai-${item.name_en}`,
     name_ar: item.name_ar,
     name_en: item.name_en,
     source: "ai",
     category: item.category,
-    per100g: normalizeMacroNutrients(e),
+    unit_type: item.category === "beverage" ? "ml" : "g",
+    per_100g,
   };
 }
 
 /**
+ * Guard against mismatched foods: reject a DB/curated match whose per-100g macros
+ * contradict the AI's own estimate for the same item by a large margin.
+ */
+function isConsistentWithAi(
+  food: FoodNutrition,
+  item: Pick<ParsedItem, "ai_fallback_per_100g" | "ai_estimated_per_100g">,
+): boolean {
+  const e = item.ai_estimated_per_100g || item.ai_fallback_per_100g;
+  if (!e) return true;
+  const ai = normalizeMacroNutrients(e);
+  if (ai.protein_g + ai.carbs_g + ai.fat_g === 0) return true;
+  const m = food.per_100g;
+  return (
+    Math.abs(m.protein_g - ai.protein_g) <= 12 &&
+    Math.abs(m.carbs_g - ai.carbs_g) <= 25 &&
+    Math.abs(m.fat_g - ai.fat_g) <= 20
+  );
+}
+
+/**
  * Find the best food for an item:
- * 1. Supabase foods table first (source "db")
- * 2. In-memory curated Saudi foods dataset
- * 3. Fall back to AI bounded per-100g estimate (source "ai")
+ * 1. Checks for OCR label products in Supabase first (source = 'label_ocr')
+ * 2. Check pinned unadulterated core staples (`STAPLE_SAUDI_FOODS`) with exact matching
+ * 3. Supabase foods table with 4-tier strict ranking + hard macro sanity guard
+ * 4. In-memory curated Saudi foods dataset with 4-tier strict ranking + hard macro sanity guard
+ * 5. Fall back to AI bounded per-100g estimate (source "ai")
  */
 export async function findFood(
   item: Pick<
@@ -581,32 +1023,76 @@ export async function findFood(
     "name_ar" | "name_en" | "category" | "ai_fallback_per_100g" | "ai_estimated_per_100g"
   >,
 ): Promise<FoodNutrition | null> {
-  const full = [item.name_ar, item.name_en].map((s) => clean(s ?? "")).filter(Boolean);
-  const words = full
-    .flatMap((s) => s.split(" "))
-    .filter((w) => w.length >= 3)
-    .sort((a, b) => b.length - a.length);
-  const terms = [...new Set([...full, ...words])];
+  const queryLabel = `${item.name_ar ?? ""} ${item.name_en ?? ""}`.trim();
 
-  // 1. Try Supabase foods lookup
+  const fullTerms = [
+    cleanFoodNameForMatching(item.name_ar ?? ""),
+    cleanFoodNameForMatching(item.name_en ?? ""),
+    normalizeQuery(item.name_ar ?? ""),
+    clean(item.name_ar ?? ""),
+    clean(item.name_en ?? ""),
+  ].filter((s) => s.length >= 2);
+  const terms = [...new Set(fullTerms)];
+
+  // 1. Check if an OCR product label exists in Supabase (e.g. user-saved protein powder or branded drink)
   for (const term of terms) {
     const rows = await search(term);
-    if (rows.length > 0) {
-      const nt = normalizeArabic(term);
-      const best = [...rows].sort((a, b) => score(b, nt) - score(a, nt))[0];
-      return toFood(best);
+    const ocrRow = rows.find(
+      (r) =>
+        r.source === "label_ocr" ||
+        (r as unknown as { quality?: string }).quality === "label_ocr",
+    );
+    if (ocrRow) {
+      const food = toFood(ocrRow);
+      if (
+        passesMacroSanityGuard(queryLabel, food.per_100g, food.category ?? item.category) &&
+        isConsistentWithAi(food, item)
+      ) {
+        return food;
+      }
     }
   }
 
-  // 2. Try in-memory Curated Saudi foods
+  // 2. Pinned Core Staples (exact match for boiled egg, brown bread, chicken breast, tuna, diet pepsi, etc.)
+  const pinnedStaple = matchPinnedStaple(item.name_ar, item.name_en);
+  if (pinnedStaple) {
+    return pinnedStaple;
+  }
+
+  // 3. Try Supabase foods lookup
+  for (const term of terms) {
+    const rows = await search(term);
+    if (rows.length > 0) {
+      const ranked = [...rows]
+        .map((r) => ({ row: r, s: score(r, term) }))
+        .filter((x) => x.s >= 55)
+        .sort((a, b) => b.s - a.s);
+
+      for (const { row } of ranked) {
+        const food = toFood(row);
+        if (
+          passesMacroSanityGuard(queryLabel, food.per_100g, food.category ?? item.category) &&
+          isConsistentWithAi(food, item)
+        ) {
+          return food;
+        }
+      }
+    }
+  }
+
+  // 4. Try in-memory Curated Saudi foods
   for (const term of terms) {
     const curated = searchCuratedFallback(term);
-    if (curated) {
+    if (
+      curated &&
+      passesMacroSanityGuard(queryLabel, curated.per_100g, curated.category ?? item.category) &&
+      isConsistentWithAi(curated, item)
+    ) {
       return curated;
     }
   }
 
-  // 3. AI estimate fallback strictly if DB and curated match failed
+  // 5. AI estimate fallback strictly if DB and curated match failed
   console.warn("[foods] no curated DB match, using AI estimate fallback for", item.name_ar, "/", item.name_en);
   return foodFromAi(item);
 }
@@ -620,6 +1106,9 @@ export function toMealItem(params: {
   parsedName?: { ar?: string; en?: string };
   category?: FoodCategory;
   grams: number;
+  unit_type?: "g" | "ml";
+  item_type?: "countable" | "plated";
+  size_modifier?: "small" | "medium" | "large" | null;
   state?: FoodState;
   source?: MacroSource;
   confidence?: "high" | "medium" | "low";
@@ -629,7 +1118,7 @@ export function toMealItem(params: {
 }): MealItem {
   const name_ar = params.parsedName?.ar || params.food?.name_ar || params.food?.name_en || "صنف";
   const name_en = params.parsedName?.en || params.food?.name_en || params.food?.name_ar || "item";
-  const per_100g = params.food?.per100g ?? { calories: 0, protein_g: 0, carbs_g: 0, fat_g: 0 };
+  const per_100g = params.food?.per_100g ?? { calories: 0, protein_g: 0, carbs_g: 0, fat_g: 0 };
   const source: MacroSource =
     params.source || (params.food?.source === "db" ? "db_match" : "ai_estimate");
 
@@ -638,6 +1127,9 @@ export function toMealItem(params: {
     params.default_portion_g ?? params.food?.default_portion_g ?? null;
   const reference_unit_g =
     params.reference_unit_g ?? params.food?.reference_unit_g ?? null;
+  const unit_type =
+    params.unit_type || params.food?.unit_type || (category === "beverage" ? "ml" : "g");
+  const item_type = params.item_type || params.food?.item_type;
 
   // If portion was assumed and grams were <= 0, use default_portion_g
   let initialGrams = Number(params.grams) || 0;
@@ -646,19 +1138,25 @@ export function toMealItem(params: {
   }
   const safeGrams = Math.max(0, Math.min(5000, initialGrams));
 
+  const isUnspecifiedTuna =
+    params.food?.id === "curated-tuna-water" &&
+    !/ماء|زيت|water|oil/i.test(`${params.parsedName?.ar ?? ""} ${params.parsedName?.en ?? ""}`);
+
   const rawItem: MealItem = {
     id: `item-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     canonical_name: name_en,
     display_name_ar: name_ar,
     grams: safeGrams,
-    unit_type: "g",
+    unit_type,
+    item_type,
+    size_modifier: params.size_modifier,
     state: params.state || params.food?.category === "meat_poultry" ? "cooked" : "ready_to_eat",
     category,
     per_100g: normalizeMacroNutrients(per_100g),
     source,
     food_id: params.food && params.food.source === "db" ? params.food.id : null,
     confidence: params.confidence || "medium",
-    portion_assumed: params.portion_assumed ?? false,
+    portion_assumed: isUnspecifiedTuna ? true : (params.portion_assumed ?? false),
     default_portion_g,
     default_full_loaf_or_unit_g: reference_unit_g,
     reference_unit_g,

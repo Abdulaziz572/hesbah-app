@@ -14,10 +14,22 @@ export type FoodCategory =
   | "other";
 
 export interface MacroNutrients {
-  calories: number;
-  protein_g: number;
-  carbs_g: number;
-  fat_g: number;
+  calories: number;        // الطاقة (كيلو كالوري)
+  protein_g: number;       // البروتين الكلي (غم)
+  carbs_g: number;         // الكربوهيدرات المتاحة (غم) -> fallback to الكربوهيدرات الكلية if "-"
+  fat_g: number;           // الدهون الكلية (غم)
+  // Athlete & Health Micronutrients (Optional for backward compatibility)
+  fiber_g?: number;        // الألياف الكلية (غم)
+  sugar_g?: number;        // السكريات الكلية (غم)
+  added_sugar_g?: number;  // السكريات المضافة (غم)
+  saturated_fat_g?: number;// الأحماض الدهنية المشبعة (غم)
+  cholesterol_mg?: number; // الكوليسترول (ملغم)
+  sodium_mg?: number;      // الصوديوم (ملغم) - Critical for hydration/cutting
+  potassium_mg?: number;   // البوتاسيوم (ملغم) - Critical for muscle cramps/electrolytes
+  magnesium_mg?: number;   // المغنيسيوم (ملغم) - Critical for recovery
+  calcium_mg?: number;     // الكالسيوم (ملغم)
+  iron_mg?: number;        // الحديد (ملغم)
+  zinc_mg?: number;        // الزنك (ملغم)
 }
 
 export interface MealItem {
@@ -26,6 +38,8 @@ export interface MealItem {
   display_name_ar: string;
   grams: number;
   unit_type?: "g" | "ml";
+  item_type?: "countable" | "plated";
+  size_modifier?: "small" | "medium" | "large" | null;
   state: FoodState;
   category?: FoodCategory;
   per_100g: MacroNutrients;
@@ -65,6 +79,9 @@ export interface ParsedItem {
   confidence: Confidence;
   visible: boolean;
   quantity: ParsedItemQuantity;
+  size_modifier?: "small" | "medium" | "large" | null;
+  unit_type?: "g" | "ml";
+  item_type?: "countable" | "plated";
   extracted_grams?: number | null;
   fraction_of_reference?: number | null;
   portion_assumed?: boolean;
@@ -124,16 +141,14 @@ export interface SingleItemInput {
   name_en?: string;
   category?: FoodCategory;
   grams?: number;
+  unit_type?: "g" | "ml";
+  item_type?: "countable" | "plated";
+  size_modifier?: "small" | "medium" | "large" | null;
   calories?: number;
   protein?: number;
   carbs?: number;
   fat?: number;
-  per100g?: {
-    calories: number;
-    protein: number;
-    carbs: number;
-    fat: number;
-  };
+  per_100g?: MacroNutrients;
 }
 
 /** Result returned when re-parsing or adding a single food item. */
@@ -142,17 +157,16 @@ export interface ReparsedSingleItem {
   name_en: string;
   category?: FoodCategory;
   grams: number;
-  per100g: {
-    calories: number;
-    protein: number;
-    carbs: number;
-    fat: number;
-  };
+  unit_type?: "g" | "ml";
+  item_type?: "countable" | "plated";
+  size_modifier?: "small" | "medium" | "large" | null;
+  per_100g: MacroNutrients;
   calories: number;
   protein: number;
   carbs: number;
   fat: number;
   cooking_state?: CookingState;
+  default_portion_g?: number | null;
   reference_unit_g?: number | null;
   portion_assumed?: boolean;
   plausibility_warning?: string | null;

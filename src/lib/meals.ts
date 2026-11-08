@@ -5,6 +5,7 @@ import {
   calculateItemMacros,
   calculateMealTotals,
   normalizeMacroNutrients,
+  normalizeItem,
   createMacroNutrients,
   type Macros,
   type MacroNutrients,
@@ -180,7 +181,8 @@ function eatenAtFor(targetDate: Date | undefined, now: Date): Date {
 export interface MealItemToSave {
   name: string;
   grams: number;
-  per100g: Macros | MacroNutrients;
+  unit_type?: "g" | "ml";
+  per_100g: Macros | MacroNutrients;
   calories: number;
   protein: number;
   carbs: number;
@@ -259,7 +261,7 @@ export async function saveMealItems(
   }
 
   const items = itemsToSave.map((it) => {
-    const normPer100g = normalizeMacroNutrients(it.per100g);
+    const normPer100g = normalizeMacroNutrients(it.per_100g);
     const derived = calculateItemMacros(normPer100g, it.grams);
     const cal = it.calories != null && Number.isFinite(it.calories) ? Math.round(it.calories) : derived.calories;
     const prot = it.protein != null && Number.isFinite(it.protein) ? Math.round(it.protein * 10) / 10 : derived.protein_g;
@@ -278,6 +280,7 @@ export async function saveMealItems(
         carbs,
         fat,
         name_ar: it.name,
+        unit_type: it.unit_type || "g",
       },
     };
   });
@@ -301,7 +304,8 @@ export async function saveMeal(
     return {
       name: r.parsed.name_ar || r.parsed.name_en || r.food?.name_ar || r.food?.name_en || "صنف",
       grams: grams[i],
-      per100g: r.food?.per100g ?? { calories: 0, protein: 0, carbs: 0, fat: 0 },
+      unit_type: r.food?.unit_type ?? r.parsed.unit_type ?? (r.food?.category === "beverage" ? "ml" : "g"),
+      per_100g: r.food?.per_100g ?? { calories: 0, protein: 0, carbs: 0, fat: 0 },
       calories: Math.round(m.calories),
       protein: Math.round(m.protein * 10) / 10,
       carbs: Math.round(m.carbs * 10) / 10,
@@ -317,12 +321,13 @@ export interface DiaryItem {
   id: string;
   name: string;
   grams: number;
+  unit_type?: "g" | "ml";
   calories: number;
   protein: number;
   carbs: number;
   fat: number;
   /** Per-100g values captured when the meal was saved; used to recompute on edit. */
-  per100g: Macros;
+  per_100g: Macros;
 }
 
 export interface DiaryMeal {
@@ -353,7 +358,7 @@ interface MealRow {
     id: string;
     grams: number | string;
     per_100g_snapshot: Partial<Macros> | null;
-    nutrients: (Partial<Macros> & { name_ar?: string; name_en?: string }) | null;
+    nutrients: (Partial<Macros> & { name_ar?: string; name_en?: string; unit_type?: "g" | "ml" }) | null;
     foods: { name_ar?: string; name_en?: string } | null;
   }[];
 }
@@ -410,36 +415,46 @@ async function queryMeals(startDate: Date, endDate: Date, explicitUserId?: strin
       const grams = num(it.grams);
       const snapNorm = normalizeMacroNutrients(it.per_100g_snapshot);
       const nutNorm = normalizeMacroNutrients(it.nutrients);
+      const itemName =
+        it.nutrients?.name_ar || it.foods?.name_ar || it.nutrients?.name_en || it.foods?.name_en || "عنصر";
 
-      // Backward compatibility recovery:
-      // If per_100g_snapshot was empty or zero in legacy DB rows, but nutrients has positive calories:
-      if (snapNorm.calories === 0 && nutNorm.calories > 0 && grams > 0) {
-        const factor = 100 / grams;
-        snapNorm.calories = Math.round(nutNorm.calories * factor);
-        snapNorm.protein_g = Math.round(nutNorm.protein_g * factor * 10) / 10;
-        snapNorm.carbs_g = Math.round(nutNorm.carbs_g * factor * 10) / 10;
-        snapNorm.fat_g = Math.round(nutNorm.fat_g * factor * 10) / 10;
-      }
+      // Convert serving values to per_100g ONCE at the boundary via normalizeItem()
+      const normalized = normalizeItem({
+        name: itemName,
+        grams,
+        unit_type: it.nutrients?.unit_type,
+        per_100g: snapNorm.calories > 0 ? snapNorm : undefined,
+        serving_macros:
+          snapNorm.calories === 0 && nutNorm.calories > 0 && grams > 0
+            ? {
+                calories: nutNorm.calories,
+                protein_g: nutNorm.protein_g,
+                carbs_g: nutNorm.carbs_g,
+                fat_g: nutNorm.fat_g,
+                basis_grams: grams,
+              }
+            : undefined,
+      });
 
-      // If nutrients was explicitly stored with positive calories, preserve it; otherwise derive deterministically
-      const itemMacros = nutNorm.calories > 0 ? nutNorm : calculateItemMacros(snapNorm, grams);
+      const derived = calculateItemMacros(normalized.per_100g, normalized.grams);
 
       return {
         id: it.id,
-        name: it.nutrients?.name_ar || it.foods?.name_ar || it.nutrients?.name_en || it.foods?.name_en || "عنصر",
-        grams,
-        calories: itemMacros.calories,
-        protein: itemMacros.protein_g,
-        carbs: itemMacros.carbs_g,
-        fat: itemMacros.fat_g,
-        per100g: {
-          calories: snapNorm.calories,
-          protein: snapNorm.protein_g,
-          carbs: snapNorm.carbs_g,
-          fat: snapNorm.fat_g,
-          protein_g: snapNorm.protein_g,
-          carbs_g: snapNorm.carbs_g,
-          fat_g: snapNorm.fat_g,
+        name: normalized.name,
+        grams: normalized.grams,
+        unit_type: normalized.unit_type,
+        calories: derived.calories,
+        protein: derived.protein_g,
+        carbs: derived.carbs_g,
+        fat: derived.fat_g,
+        per_100g: {
+          calories: normalized.per_100g.calories,
+          protein: normalized.per_100g.protein_g,
+          carbs: normalized.per_100g.carbs_g,
+          fat: normalized.per_100g.fat_g,
+          protein_g: normalized.per_100g.protein_g,
+          carbs_g: normalized.per_100g.carbs_g,
+          fat_g: normalized.per_100g.fat_g,
         },
       };
     });
@@ -448,7 +463,7 @@ async function queryMeals(startDate: Date, endDate: Date, explicitUserId?: strin
     const finalTotals =
       totalsNorm.calories > 0
         ? totalsNorm
-        : calculateMealTotals(items.map((it) => ({ per_100g: it.per100g, grams: it.grams })));
+        : calculateMealTotals(items.map((it) => ({ per_100g: it.per_100g, grams: it.grams })));
 
     return {
       id: m.id,
@@ -533,7 +548,8 @@ export async function copyMealToDate(meal: DiaryMeal, targetDate: Date = new Dat
     meal.items.map((it) => ({
       name: it.name,
       grams: it.grams,
-      per100g: it.per100g,
+      unit_type: it.unit_type,
+      per_100g: it.per_100g,
       calories: it.calories,
       protein: it.protein,
       carbs: it.carbs,
@@ -627,7 +643,8 @@ export interface UpdateMealItemInput {
   id?: string;
   name: string;
   grams: number;
-  per100g: Macros | MacroNutrients;
+  unit_type?: "g" | "ml";
+  per_100g: Macros | MacroNutrients;
   calories?: number;
   protein?: number;
   carbs?: number;
@@ -654,7 +671,7 @@ interface StoredItem {
   id: string;
   grams: number | string;
   per_100g_snapshot: Partial<Macros> | null;
-  nutrients: (Partial<Macros> & { name_ar?: string; name_en?: string }) | null;
+  nutrients: (Partial<Macros> & { name_ar?: string; name_en?: string; unit_type?: "g" | "ml" }) | null;
 }
 
 /**
@@ -690,13 +707,13 @@ export async function updateMeal(mealId: string, updatedData: UpdateMealData): P
       grams: number;
       quality: string;
       per_100g_snapshot: Macros | MacroNutrients;
-      nutrients: Macros & { name_ar: string };
+      nutrients: Macros & { name_ar: string; unit_type?: "g" | "ml" };
     }[] = [];
     const itemMacrosList: Macros[] = [];
 
     for (const itemInput of updatedData.items) {
       const grams = Math.max(0, Math.min(5000, num(itemInput.grams)));
-      const snap = normalizeMacroNutrients(itemInput.per100g);
+      const snap = normalizeMacroNutrients(itemInput.per_100g);
       const derived = calculateItemMacros(snap, grams);
       const cal = itemInput.calories != null && Number.isFinite(itemInput.calories) ? Math.round(num(itemInput.calories)) : derived.calories;
       const prot = itemInput.protein != null && Number.isFinite(itemInput.protein) ? Math.round(num(itemInput.protein) * 10) / 10 : derived.protein_g;
@@ -719,6 +736,7 @@ export async function updateMeal(mealId: string, updatedData: UpdateMealData): P
               carbs,
               fat,
               name_ar: itemInput.name,
+              unit_type: itemInput.unit_type || "g",
             },
           })
           .eq("id", itemInput.id)
@@ -736,6 +754,7 @@ export async function updateMeal(mealId: string, updatedData: UpdateMealData): P
             carbs,
             fat,
             name_ar: itemInput.name,
+            unit_type: itemInput.unit_type || "g",
           },
         });
       }

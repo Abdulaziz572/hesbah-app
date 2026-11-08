@@ -41,3 +41,7 @@ yarn-error.log*
 next-env.d.ts
 powershell.cmd
 /scratch
+
+# SFDA scraped data & captured headers
+/data/
+/scripts/sfda-headers.json

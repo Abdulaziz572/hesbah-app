@@ -5,6 +5,8 @@ import {
   calculateItemMacros,
   createMacroNutrients,
   normalizeMacroNutrients,
+  normalizeItem,
+  getItemType,
   type Macros,
   type MacroNutrients,
 } from "@/src/lib/nutrition";
@@ -15,7 +17,9 @@ export interface MealEditorItem {
   id: string;
   name: string;
   grams: number;
-  per100g: MacroNutrients | Macros;
+  unit_type?: "g" | "ml";
+  item_type?: "countable" | "plated";
+  per_100g: MacroNutrients | Macros;
   calories: number;
   protein: number;
   carbs: number;
@@ -94,7 +98,7 @@ export default function MealItemsEditor({ items, onChange, disabled }: Props) {
     onChange(
       items.map((it) => {
         if (it.id !== id) return it;
-        const derived = calculateItemMacros(it.per100g, safeGrams);
+        const derived = calculateItemMacros(it.per_100g, safeGrams);
         return {
           ...it,
           grams: safeGrams,
@@ -140,7 +144,7 @@ export default function MealItemsEditor({ items, onChange, disabled }: Props) {
             protein: aiFixItem.protein,
             carbs: aiFixItem.carbs,
             fat: aiFixItem.fat,
-            per100g: aiFixItem.per100g,
+            per_100g: aiFixItem.per_100g,
           },
         }),
       });
@@ -158,12 +162,15 @@ export default function MealItemsEditor({ items, onChange, disabled }: Props) {
             ...it,
             name: updated.name_ar || updated.name_en || it.name,
             grams: updated.grams,
-            per100g: updated.per100g,
+            unit_type: updated.unit_type ?? it.unit_type,
+            item_type: updated.item_type ?? it.item_type,
+            per_100g: updated.per_100g,
             calories: updated.calories,
             protein: updated.protein,
             carbs: updated.carbs,
             fat: updated.fat,
             reference_unit_g: updated.reference_unit_g ?? it.reference_unit_g,
+            default_portion_g: updated.default_portion_g ?? it.default_portion_g,
             portion_assumed: updated.portion_assumed ?? false,
             plausibility_warning: updated.plausibility_warning ?? null,
             badge: { type: "ai_edited", label: "معدّل بالـ AI ✨" },
@@ -197,33 +204,30 @@ export default function MealItemsEditor({ items, onChange, disabled }: Props) {
   // Submit manual edit
   function handleManualSubmit() {
     if (!manualItem || !manualForm.name.trim()) return;
-    const grams = Math.max(1, manualForm.grams);
-    const calories = Math.max(0, manualForm.calories);
-    const protein = Math.max(0, manualForm.protein);
-    const carbs = Math.max(0, manualForm.carbs);
-    const fat = Math.max(0, manualForm.fat);
-
-    const factor = grams > 0 ? grams / 100 : 1;
-    const per100g = createMacroNutrients(
-      calories / factor,
-      protein / factor,
-      carbs / factor,
-      fat / factor,
-    );
-    const derived = calculateItemMacros(per100g, grams);
+    const norm = normalizeItem({
+      name: manualForm.name.trim(),
+      grams: Math.max(1, manualForm.grams),
+      serving_macros: {
+        calories: Math.max(0, manualForm.calories),
+        protein_g: Math.max(0, manualForm.protein),
+        carbs_g: Math.max(0, manualForm.carbs),
+        fat_g: Math.max(0, manualForm.fat),
+        basis_grams: Math.max(1, manualForm.grams),
+      },
+    });
 
     onChange(
       items.map((it) => {
         if (it.id !== manualItem.id) return it;
         return {
           ...it,
-          name: manualForm.name.trim(),
-          grams,
-          calories: derived.calories,
-          protein: derived.protein_g,
-          carbs: derived.carbs_g,
-          fat: derived.fat_g,
-          per100g,
+          name: norm.name,
+          grams: norm.grams,
+          calories: norm.calories,
+          protein: norm.protein,
+          carbs: norm.carbs,
+          fat: norm.fat,
+          per_100g: norm.per_100g,
           badge: { type: "manual", label: "تعديل يدوي ✏️" },
         };
       }),
@@ -258,14 +262,18 @@ export default function MealItemsEditor({ items, onChange, disabled }: Props) {
         id: `added-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         name: newItem.name_ar || newItem.name_en || "صنف جديد",
         grams: newItem.grams,
-        per100g: newItem.per100g,
+        unit_type: newItem.unit_type || (newItem.category === "beverage" ? "ml" : "g"),
+        item_type: newItem.item_type,
+        per_100g: newItem.per_100g,
         calories: newItem.calories,
         protein: newItem.protein,
         carbs: newItem.carbs,
         fat: newItem.fat,
         reference_unit_g: newItem.reference_unit_g,
+        default_portion_g: newItem.default_portion_g,
         portion_assumed: newItem.portion_assumed ?? false,
         plausibility_warning: newItem.plausibility_warning ?? null,
+        category: newItem.category,
         badge: { type: "ai_edited", label: "مضاف بالـ AI ✨" },
       };
 
@@ -284,30 +292,29 @@ export default function MealItemsEditor({ items, onChange, disabled }: Props) {
   // Add new item manually
   function handleAddManualSubmit() {
     if (!addManualForm.name.trim()) return;
-    const grams = Math.max(1, addManualForm.grams);
-    const calories = Math.max(0, addManualForm.calories);
-    const protein = Math.max(0, addManualForm.protein);
-    const carbs = Math.max(0, addManualForm.carbs);
-    const fat = Math.max(0, addManualForm.fat);
-
-    const factor = grams > 0 ? grams / 100 : 1;
-    const per100g = createMacroNutrients(
-      calories / factor,
-      protein / factor,
-      carbs / factor,
-      fat / factor,
-    );
-    const derived = calculateItemMacros(per100g, grams);
+    const norm = normalizeItem({
+      name: addManualForm.name.trim(),
+      grams: Math.max(1, addManualForm.grams),
+      serving_macros: {
+        calories: Math.max(0, addManualForm.calories),
+        protein_g: Math.max(0, addManualForm.protein),
+        carbs_g: Math.max(0, addManualForm.carbs),
+        fat_g: Math.max(0, addManualForm.fat),
+        basis_grams: Math.max(1, addManualForm.grams),
+      },
+    });
 
     const createdItem: MealEditorItem = {
       id: `manual-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      name: addManualForm.name.trim(),
-      grams,
-      calories: derived.calories,
-      protein: derived.protein_g,
-      carbs: derived.carbs_g,
-      fat: derived.fat_g,
-      per100g,
+      name: norm.name,
+      grams: norm.grams,
+      unit_type: norm.unit_type,
+      item_type: norm.item_type,
+      calories: norm.calories,
+      protein: norm.protein,
+      carbs: norm.carbs,
+      fat: norm.fat,
+      per_100g: norm.per_100g,
       badge: { type: "manual", label: "إدخال يدوي ✏️" },
     };
 
@@ -340,6 +347,24 @@ export default function MealItemsEditor({ items, onChange, disabled }: Props) {
       ) : (
         items.map((it, idx) => {
           const isHighlighted = highlightedId === it.id;
+          const unitLabel: "g" | "ml" = it.unit_type || (it.category === "beverage" ? "ml" : "g");
+          const resolvedType = getItemType(it);
+          const unitPortion = it.default_portion_g || it.reference_unit_g || 0;
+
+          const chips =
+            resolvedType === "countable" && unitPortion > 0
+              ? [1, 2, 3].map((cnt) => ({
+                  label: `${cnt} حبة`,
+                  grams: Math.round(unitPortion * cnt),
+                }))
+              : resolvedType === "plated" && it.reference_unit_g != null && it.reference_unit_g > 0
+              ? [
+                  { label: "ربع", grams: Math.round(it.reference_unit_g * 0.25) },
+                  { label: "نص", grams: Math.round(it.reference_unit_g * 0.5) },
+                  { label: "كامل", grams: Math.round(it.reference_unit_g * 1.0) },
+                ]
+              : [];
+
           return (
             <div
               key={it.id}
@@ -399,27 +424,24 @@ export default function MealItemsEditor({ items, onChange, disabled }: Props) {
                 </div>
               </div>
 
-              {/* Portion Chips (ربع / نص / كامل) when reference_unit_g exists */}
-              {it.reference_unit_g != null && it.reference_unit_g > 0 && (
+              {/* Portion Chips: (1 / 2 / 3 حبة) for countable, (ربع / نص / كامل) for plated */}
+              {chips.length > 0 && (
                 <div className="flex items-center justify-between gap-1.5 pt-2 border-t border-outline-variant/15 flex-wrap">
                   <div className="flex items-center gap-1 text-[11px] font-medium text-on-surface-variant">
-                    <span className="material-symbols-outlined text-[14px]">pie_chart</span>
-                    <span>تحديد الحصة:</span>
+                    <span className="material-symbols-outlined text-[14px]">
+                      {resolvedType === "countable" ? "pin" : "pie_chart"}
+                    </span>
+                    <span>{resolvedType === "countable" ? "العدد:" : "تحديد الحصة:"}</span>
                   </div>
                   <div className="flex items-center gap-1.5">
-                    {[
-                      { label: "ربع", factor: 0.25 },
-                      { label: "نص", factor: 0.5 },
-                      { label: "كامل", factor: 1.0 },
-                    ].map((chip) => {
-                      const chipGrams = Math.round(it.reference_unit_g! * chip.factor);
-                      const isActive = it.grams === chipGrams;
+                    {chips.map((chip) => {
+                      const isActive = it.grams === chip.grams;
                       return (
                         <button
                           key={chip.label}
                           type="button"
                           disabled={disabled}
-                          onClick={() => updateGrams(it.id, chipGrams, true)}
+                          onClick={() => updateGrams(it.id, chip.grams, true)}
                           className={`h-7 px-2.5 rounded-lg text-[12px] font-semibold transition-all active:scale-95 flex items-center gap-1 ${
                             isActive
                               ? "bg-primary text-on-primary shadow-xs ring-1 ring-primary"
@@ -432,7 +454,7 @@ export default function MealItemsEditor({ items, onChange, disabled }: Props) {
                               isActive ? "text-on-primary/80" : "text-on-surface-variant"
                             }`}
                           >
-                            ({chipGrams}g)
+                            ({chip.grams}{unitLabel})
                           </span>
                         </button>
                       );
@@ -485,6 +507,7 @@ export default function MealItemsEditor({ items, onChange, disabled }: Props) {
                 <GramsStepper
                   id={`item-grams-${idx}`}
                   value={it.grams}
+                  unit={unitLabel}
                   onChange={(g) => updateGrams(it.id, g)}
                   disabled={disabled}
                 />
@@ -545,7 +568,7 @@ export default function MealItemsEditor({ items, onChange, disabled }: Props) {
             <div className="p-3 rounded-xl bg-surface-container-low flex flex-col gap-0.5">
               <span className="text-[11px] text-on-surface-variant">المكون الحالي:</span>
               <span className="text-[14px] font-bold text-on-surface">
-                {aiFixItem.name} • {fmt(aiFixItem.grams)}g ({fmt(aiFixItem.calories)} سعرة)
+                {aiFixItem.name} • {fmt(aiFixItem.grams)}{aiFixItem.unit_type || "g"} ({fmt(aiFixItem.calories)} سعرة)
               </span>
             </div>
 

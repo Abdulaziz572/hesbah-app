@@ -10,10 +10,11 @@ interface Props {
   id?: string;
   step?: number;
   disabled?: boolean;
+  unit?: "g" | "ml";
 }
 
 /** − / + buttons plus a directly editable numeric field. */
-export default function GramsStepper({ value, onChange, id, step = 10, disabled }: Props) {
+export default function GramsStepper({ value, onChange, id, step = 10, disabled, unit = "g" }: Props) {
   // While the field is focused we keep the raw text so users can clear it and retype.
   const [text, setText] = useState<string | null>(null);
   const clamp = (n: number) => Math.max(0, Math.min(MAX_GRAMS, n));
@@ -47,7 +48,7 @@ export default function GramsStepper({ value, onChange, id, step = 10, disabled 
           onBlur={() => setText(null)}
           className="w-14 text-center font-bold text-[16px] text-on-surface bg-transparent outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
         />
-        <span className="text-[12px] text-on-surface-variant pe-1">g</span>
+        <span className="text-[12px] text-on-surface-variant pe-1">{unit}</span>
       </div>
       <button
         type="button"
