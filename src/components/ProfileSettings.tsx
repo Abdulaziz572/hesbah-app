@@ -461,7 +461,6 @@ export default function ProfileSettings() {
   const [initialCached] = useState(() => (userId ? getCachedUserProfile(userId) : null));
   const [form, setForm] = useState<UserProfile>(() => initialCached ?? defaultProfile(userId));
   const [saved, setSaved] = useState<UserProfile | null>(initialCached);
-  const [loaded, setLoaded] = useState(Boolean(initialCached));
   const [touched, setTouched] = useState(false);
   const touchedRef = useRef(false);
   const [saving, setSaving] = useState(false);
@@ -530,7 +529,7 @@ export default function ProfileSettings() {
   const queryClient = useQueryClient();
 
   // Fetch the authoritative profile with TanStack Query (Supabase → localStorage fallback).
-  const { data: profileData } = useQuery({
+  const { data: profileData, isLoading: profileLoading } = useQuery({
     queryKey: queryKeys.profile(userId),
     queryFn: () => getUserProfile(userId),
     enabled: !!userId,
@@ -563,7 +562,6 @@ export default function ProfileSettings() {
     if (profileData && !touchedRef.current) {
       setSaved(profileData);
       setForm(profileData);
-      setLoaded(true);
     }
   }, [profileData]);
 
@@ -826,7 +824,7 @@ export default function ProfileSettings() {
       </div>
 
       <main className="flex-1 px-4 pt-4 flex flex-col gap-6">
-        {!loaded ? (
+        {profileLoading ? (
           <div className="flex flex-col gap-4" aria-busy="true" aria-label="جارٍ تحميل ملفك الشخصي…">
             <div className="h-56 rounded-[20px] bg-surface-container animate-pulse" />
             <div className="h-72 rounded-[20px] bg-surface-container animate-pulse" />
@@ -1101,60 +1099,6 @@ export default function ProfileSettings() {
               </div>
             </section>
 
-            {/* ---------- App Settings (Theme) ---------- */}
-            <section aria-labelledby={`${uid}-app`} className="flex flex-col gap-2">
-              <SectionHeading id={`${uid}-app`}>إعدادات التطبيق</SectionHeading>
-              <div className={`${card} p-4 flex flex-col gap-2`}>
-                <span aria-hidden="true" className="text-[15px] text-on-surface">
-                  المظهر
-                </span>
-                <Segmented
-                  name="theme"
-                  legend="المظهر"
-                  options={THEME_OPTIONS}
-                  value={mounted ? theme : null}
-                  onChange={setTheme}
-                />
-                <span className="text-[12px] text-on-surface-variant">
-                  «تلقائي» يتبع إعداد جهازك.
-                </span>
-              </div>
-            </section>
-
-            {/* ---------- Account ---------- */}
-            <section aria-labelledby={`${uid}-account`} className="flex flex-col gap-2">
-              <SectionHeading id={`${uid}-account`}>الحساب</SectionHeading>
-              <div className={card}>
-                <div className="flex items-center gap-3 p-4">
-                  <span
-                    aria-hidden="true"
-                    className="w-11 h-11 shrink-0 rounded-full bg-primary-fixed text-on-primary-fixed flex items-center justify-center text-[17px] font-bold"
-                  >
-                    {initial || <span className="material-symbols-outlined text-[22px]">person</span>}
-                  </span>
-                  <div className="flex flex-col min-w-0">
-                    <span className="text-[12px] text-on-surface-variant">مسجّل الدخول بـ</span>
-                    <span dir="ltr" className="text-[15px] font-semibold text-on-surface truncate text-end">
-                      {contact || "—"}
-                    </span>
-                  </div>
-                </div>
-                <div className={`${rowDivider} p-2`}>
-                  <button
-                    id="profile-sign-out"
-                    type="button"
-                    onClick={handleSignOut}
-                    disabled={signingOut}
-                    className={`w-full h-12 rounded-xl flex items-center justify-center gap-2 text-error text-[15px] font-semibold hover:bg-error-container/40 active:scale-[0.98] transition-[background-color,transform] disabled:opacity-60 ${focusRing}`}
-                  >
-                    <span aria-hidden="true" className="material-symbols-outlined text-[20px]">
-                      logout
-                    </span>
-                    {signingOut ? "جارٍ تسجيل الخروج…" : "تسجيل الخروج"}
-                  </button>
-                </div>
-              </div>
-            </section>
           </div>
         ) : (
           /* ================================================================ */
@@ -1681,6 +1625,65 @@ export default function ProfileSettings() {
               </div>
             </div>
           </div>
+        )}
+
+        {subView === "menu" && (
+          <>
+            {/* ---------- App Settings (Theme) ---------- */}
+            <section aria-labelledby={`${uid}-app`} className="flex flex-col gap-2">
+              <SectionHeading id={`${uid}-app`}>إعدادات التطبيق</SectionHeading>
+              <div className={`${card} p-4 flex flex-col gap-2`}>
+                <span aria-hidden="true" className="text-[15px] text-on-surface">
+                  المظهر
+                </span>
+                <Segmented
+                  name="theme"
+                  legend="المظهر"
+                  options={THEME_OPTIONS}
+                  value={mounted ? theme : null}
+                  onChange={setTheme}
+                />
+                <span className="text-[12px] text-on-surface-variant">
+                  «تلقائي» يتبع إعداد جهازك.
+                </span>
+              </div>
+            </section>
+
+            {/* ---------- Account ---------- */}
+            <section aria-labelledby={`${uid}-account`} className="flex flex-col gap-2">
+              <SectionHeading id={`${uid}-account`}>الحساب</SectionHeading>
+              <div className={card}>
+                <div className="flex items-center gap-3 p-4">
+                  <span
+                    aria-hidden="true"
+                    className="w-11 h-11 shrink-0 rounded-full bg-primary-fixed text-on-primary-fixed flex items-center justify-center text-[17px] font-bold"
+                  >
+                    {initial || <span className="material-symbols-outlined text-[22px]">person</span>}
+                  </span>
+                  <div className="flex flex-col min-w-0">
+                    <span className="text-[12px] text-on-surface-variant">مسجّل الدخول بـ</span>
+                    <span dir="ltr" className="text-[15px] font-semibold text-on-surface truncate text-end">
+                      {contact || "—"}
+                    </span>
+                  </div>
+                </div>
+                <div className={`${rowDivider} p-2`}>
+                  <button
+                    id="profile-sign-out"
+                    type="button"
+                    onClick={handleSignOut}
+                    disabled={signingOut}
+                    className={`w-full h-12 rounded-xl flex items-center justify-center gap-2 text-error text-[15px] font-semibold hover:bg-error-container/40 active:scale-[0.98] transition-[background-color,transform] disabled:opacity-60 ${focusRing}`}
+                  >
+                    <span aria-hidden="true" className="material-symbols-outlined text-[20px]">
+                      logout
+                    </span>
+                    {signingOut ? "جارٍ تسجيل الخروج…" : "تسجيل الخروج"}
+                  </button>
+                </div>
+              </div>
+            </section>
+          </>
         )}
       </main>
     </div>
