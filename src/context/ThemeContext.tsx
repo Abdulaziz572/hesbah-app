@@ -33,7 +33,14 @@ function applyTheme(resolved: "light" | "dark") {
   el.classList.toggle("dark", resolved === "dark");
   el.style.colorScheme = resolved;
   const surface = getComputedStyle(el).getPropertyValue("--surface").trim();
-  if (surface) document.querySelector('meta[name="theme-color"]')?.setAttribute("content", surface);
+  if (!surface) return;
+  let meta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
+  if (!meta) {
+    meta = document.createElement("meta");
+    meta.name = "theme-color";
+    document.head.appendChild(meta);
+  }
+  meta.content = surface;
 }
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
