@@ -14,6 +14,12 @@ const plex = IBM_Plex_Sans_Arabic({
 });
 
 export const metadata: Metadata = {
+  applicationName: "حسبة",
+  appleWebApp: {
+    capable: true,
+    title: "حسبة",
+    statusBarStyle: "default",
+  },
   title: "حسبة | متتبع التغذية",
   description: "سجّل وجباتك بالكتابة وحلّلها بالذكاء الاصطناعي",
 };
@@ -21,6 +27,7 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
+  themeColor: "#006948",
 };
 
 export default function RootLayout({
